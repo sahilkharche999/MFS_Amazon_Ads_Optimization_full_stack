@@ -1,0 +1,59 @@
+version: "3.9"
+
+services:
+  frontend:
+    image: mfs-frontend-image:latest
+    container_name: mfs-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - frontend
+
+  backend:
+    image: mfs-backend-image:latest
+    container_name: mfs-backend
+    ports:
+      - "8000:8000"
+    environment:
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_DATABASE: ${DB_DATABASE}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      AMAZON_REFRESH_TOKEN: ${AMAZON_REFRESH_TOKEN}
+      AMAZON_CLIENT_ID: ${AMAZON_CLIENT_ID}
+      AMAZON_CLIENT_SECRET: ${AMAZON_CLIENT_SECRET}
+      AMAZON_PROFILE_ID: ${AMAZON_PROFILE_ID}
+    depends_on:
+      - db
+    networks:
+      - frontend
+      - backend
+
+  db:
+    image: mysql:8.0
+    container_name: mfs-db
+    environment:
+      MYSQL_ROOT_PASSWORD: ${ROOT_PASSWORD}
+      MYSQL_DATABASE: ${DB_DATABASE}
+      MYSQL_USER: ${DB_USER}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - ./db-container:/var/lib/mysql
+    ports:
+      - "3306:3306"
+    networks:
+      - backend
+
+networks:
+  frontend:
+    driver: bridge
+  backend:
+    driver: bridge
+
+volumes:
+  mfs_mysql_data:
+    driver: local
