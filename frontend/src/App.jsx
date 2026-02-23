@@ -25,7 +25,7 @@ function App() {
         <Router>
           <Routes>
               {/* Dashboard */}
-              <Route index element={<Home />} />
+              <Route path="/" index element={<Home />} />
 
               {/* Campaigns */}
               <Route path="campaigns" element={<Campaigns />} />
