@@ -6,5 +6,4 @@ backend/.env
 frontend/node_modules/
 frontend/build/
 frontend/.env
-db-container/
 .idea/
