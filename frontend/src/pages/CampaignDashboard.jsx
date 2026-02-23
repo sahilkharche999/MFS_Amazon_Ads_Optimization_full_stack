@@ -47,50 +47,56 @@ function CampaignDashboard() {
   const kpis = [
     {
       label: "Spend",
-      value: summary.spend.toFixed(2),
+      value: `$${Number(summary?.spend ?? 0).toFixed(2)}`,
       icon: <AttachMoneyIcon />,
       color: "#ed6c02"
     },
     {
       label: "Impressions",
-      value: summary.impressions,
+      value: Number(summary?.impressions ?? 0),
       icon: <VisibilityIcon />,
       color: "#1976d2"
     },
     {
       label: "Clicks",
-      value: summary.clicks,
+      value: Number(summary?.clicks ?? 0),
       icon: <MouseIcon />,
       color: "#2e7d32"
     },
     {
       label: "Orders",
-      value: summary.orders,
+      value: Number(summary?.orders ?? 0),
       icon: <ShoppingCartIcon />,
       color: "#9c27b0"
     },
     {
       label: "CTR %",
-      value: summary.ctr,
+      value: Number(summary?.ctr ?? 0),
       icon: <PercentIcon />,
       color: "#d32f2f"
     },
     {
       label: "Cost / Order",
-      value: summary.cpo,
+      value: `$${Number(summary?.cpo ?? 0).toFixed(2)}`,
       icon: <PaidIcon />,
       color: "#0288d1"
     }
   ];
+  
 
 
   useEffect(() => {
-    const today = new Date();
-    const endDate = today.toISOString().split("T")[0];
+    // const today = new Date();
+    // const endDate = today.toISOString().split("T")[0];
 
-    const start = new Date();
-    start.setDate(today.getDate() - 14);
-    const startDate = start.toISOString().split("T")[0];
+    // const start = new Date();
+    // start.setDate(today.getDate() - 14);
+    // const startDate = start.toISOString().split("T")[0];
+
+    
+    // Demo period (Fixed 14-day window)
+    const endDate = "2026-02-16";
+    const startDate = "2026-02-02";
 
     api.get(`/campaign/${campaignId}/dashboard`, {
       params: { start_date: startDate, end_date: endDate }
@@ -166,15 +172,26 @@ function CampaignDashboard() {
     }
   ];
 
+
   return (
     <Container maxWidth="xl" sx={{ mt: 4 }}>
       <Typography variant="h4" gutterBottom>
         {campaignName}
       </Typography>
 
-      <Typography variant="subtitle1" gutterBottom>
+      {type && (
+      <Typography
+        variant="subtitle1"
+        gutterBottom
+        sx={{
+          opacity: 0.7,
+          fontWeight: 400,
+          letterSpacing: 0.3
+        }}
+      >
         {type} Campaign – Last 14 Days
       </Typography>
+    )}
 
 
       {/* KPI Cards */}
