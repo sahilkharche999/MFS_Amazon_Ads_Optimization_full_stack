@@ -1,7 +1,7 @@
 import axios from "axios";
 
 const api = axios.create({
-  baseURL: "http://mfs-backend:8000/api",
+  baseURL: "http://18.220.190.68:8000/api",
 });
 
 export default api;
