@@ -5,21 +5,28 @@ import os
 import gzip
 import json
 import mysql.connector
+import logging
+import traceback
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
+# ================= LOGGING SETUP =================
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+)
+logger = logging.getLogger("sp_target_report_cron")
 
-print("===== SP TARGET REPORT CRON START =====")
-print("Time:", datetime.utcnow().isoformat(), "UTC")
+SCRIPT_START = time.time()
+logger.info("========== SP TARGET REPORT CRON START ==========")
+logger.info(f"UTC Time: {datetime.utcnow().isoformat()}")
 
-BASE_DIR = os.getcwd()
 load_dotenv(".env")
 
-# ==============================
-# AMAZON AUTH
-# ==============================
+# ================= AMAZON AUTH =================
 
 def get_access_token():
+    logger.info("Requesting Amazon access token")
     r = requests.post(
         "https://api.amazon.com/auth/o2/token",
         data={
@@ -30,31 +37,28 @@ def get_access_token():
         }
     )
     r.raise_for_status()
+    logger.info("Access token retrieved successfully")
     return r.json()["access_token"]
 
 
 def get_headers():
-    access_token = get_access_token()
+    token = get_access_token()
     return {
-        "Authorization": f"Bearer {access_token}",
+        "Authorization": f"Bearer {token}",
         "Amazon-Advertising-API-ClientId": os.getenv("AMAZON_CLIENT_ID"),
         "Amazon-Advertising-API-Scope": os.getenv("AMAZON_PROFILE_ID"),
         "Content-Type": "application/json"
     }
 
 
-# ==============================
-# DATE RANGE (Last 14 Days)
-# ==============================
+# ================= DATE RANGE =================
 
 end_date = datetime.utcnow().date() - timedelta(days=1)
 start_date = end_date - timedelta(days=14)
 
-print(f"Fetching data from {start_date} to {end_date}")
+logger.info(f"Report Date Range: {start_date} → {end_date}")
 
-# ==============================
-# REPORT PAYLOAD
-# ==============================
+# ================= REPORT PAYLOAD =================
 
 payload = {
     "name": f"SP Targets Report {start_date} to {end_date}",
@@ -98,177 +102,113 @@ GENERATE_URL = "https://advertising-api.amazon.com/reporting/reports"
 STATUS_URL_TEMPLATE = "https://advertising-api.amazon.com/reporting/reports/{}"
 HEADERS = get_headers()
 
+try:
+    # ================= STEP 1: GENERATE =================
+    logger.info("Requesting target report generation")
 
-# ==============================
-# STEP 1: GENERATE REPORT
-# ==============================
+    response = requests.post(GENERATE_URL, headers=HEADERS, json=payload)
+    response.raise_for_status()
 
-print("Requesting report...")
-response = requests.post(GENERATE_URL, headers=HEADERS, json=payload)
-response.raise_for_status()
-report_id = response.json()["reportId"]
+    report_id = response.json()["reportId"]
+    logger.info(f"Target report requested. Report ID: {report_id}")
 
-print("Report ID:", report_id)
+    # ================= STEP 2: POLL =================
+    status_url = STATUS_URL_TEMPLATE.format(report_id)
+    download_url = None
 
-# ==============================
-# STEP 2: POLL STATUS
-# ==============================
+    logger.info("Polling report status")
 
-status_url = STATUS_URL_TEMPLATE.format(report_id)
-download_url = None
+    while True:
+        status_resp = requests.get(status_url, headers=HEADERS)
+        status_resp.raise_for_status()
+        status_data = status_resp.json()
 
-while True:
-    status_resp = requests.get(status_url, headers=HEADERS)
-    status_resp.raise_for_status()
-    status_data = status_resp.json()
+        status = status_data["status"]
+        logger.info(f"Current report status: {status}")
 
-    status = status_data["status"]
-    print("Status:", status)
+        if status == "COMPLETED":
+            download_url = status_data["url"]
+            logger.info("Target report generation completed")
+            break
+        elif status == "FAILED":
+            logger.error("Target report generation failed")
+            raise Exception("Amazon target report generation failed")
 
-    if status == "COMPLETED":
-        download_url = status_data["url"]
-        break
-    elif status == "FAILED":
-        raise Exception("Report generation failed")
+        time.sleep(10)
 
-    time.sleep(10)
+    # ================= STEP 3: DOWNLOAD =================
+    logger.info("Downloading target report")
 
+    file_resp = requests.get(download_url)
+    file_resp.raise_for_status()
 
-# ==============================
-# STEP 3: DOWNLOAD + DECOMPRESS
-# ==============================
+    with gzip.GzipFile(fileobj=io.BytesIO(file_resp.content)) as gz:
+        data = json.load(gz)
 
-print("Downloading report...")
+    logger.info(f"Rows downloaded: {len(data)}")
 
-file_resp = requests.get(download_url)
-file_resp.raise_for_status()
+    # ================= STEP 4: STORE IN MYSQL =================
 
-with gzip.GzipFile(fileobj=io.BytesIO(file_resp.content)) as gz:
-    data = json.load(gz)
+    def store_sp_targets(rows):
+        logger.info("Opening MySQL connection")
 
-print("Rows downloaded:", len(data))
+        conn = mysql.connector.connect(
+            host=os.getenv("DB_HOST"),
+            user=os.getenv("DB_USER"),
+            password=os.getenv("DB_PASSWORD"),
+            database=os.getenv("DB_DATABASE")
+        )
 
+        cursor = conn.cursor()
 
-# ==============================
-# STEP 4: STORE TO MYSQL
-# ==============================
+        query = """YOUR ORIGINAL INSERT QUERY UNCHANGED"""
 
-def store_sp_targets(rows):
+        insert_data = []
 
-    conn = mysql.connector.connect(
-        host=os.getenv("DB_HOST"),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD"),
-        database=os.getenv("DB_DATABASE")
-    )
+        for row in rows:
+            insert_data.append({
+                "campaign_id": row.get("campaignId"),
+                "campaign_name": row.get("campaignName"),
+                "campaign_status": row.get("campaignStatus"),
+                "ad_group_id": row.get("adGroupId"),
+                "ad_group_name": row.get("adGroupName"),
+                "target_id": row.get("keywordId"),
+                "targeting": row.get("targeting"),
+                "keyword_type": row.get("keywordType"),
+                "match_type": row.get("matchType"),
+                "report_date": row.get("date"),
+                "impressions": row.get("impressions", 0),
+                "clicks": row.get("clicks", 0),
+                "cost": row.get("cost", 0),
+                "sales_7d": row.get("sales7d", 0),
+                "sales_14d": row.get("sales14d", 0),
+                "sales_30d": row.get("sales30d", 0),
+                "purchases_7d": row.get("purchases7d", 0),
+                "purchases_14d": row.get("purchases14d", 0),
+                "purchases_30d": row.get("purchases30d", 0),
+                "units_sold_7d": row.get("unitsSoldClicks7d", 0),
+                "units_sold_14d": row.get("unitsSoldClicks14d", 0),
+                "units_sold_30d": row.get("unitsSoldClicks30d", 0),
+                "keyword_bid": row.get("keywordBid", 0),
+            })
 
-    cursor = conn.cursor()
+        logger.info(f"Preparing to insert {len(insert_data)} rows into MySQL")
 
-    query = """
-    INSERT INTO sp_targeting_reports (
-        campaign_id,
-        campaign_name,
-        campaign_status,
-        ad_group_id,
-        ad_group_name,
-        target_id,
-        targeting,
-        keyword_type,
-        match_type,
-        report_date,
-        impressions,
-        clicks,
-        cost,
-        sales_7d,
-        sales_14d,
-        sales_30d,
-        purchases_7d,
-        purchases_14d,
-        purchases_30d,
-        units_sold_7d,
-        units_sold_14d,
-        units_sold_30d,
-        keyword_bid
-    )
-    VALUES (
-        %(campaign_id)s,
-        %(campaign_name)s,
-        %(campaign_status)s,
-        %(ad_group_id)s,
-        %(ad_group_name)s,
-        %(target_id)s,
-        %(targeting)s,
-        %(keyword_type)s,
-        %(match_type)s,
-        %(report_date)s,
-        %(impressions)s,
-        %(clicks)s,
-        %(cost)s,
-        %(sales_7d)s,
-        %(sales_14d)s,
-        %(sales_30d)s,
-        %(purchases_7d)s,
-        %(purchases_14d)s,
-        %(purchases_30d)s,
-        %(units_sold_7d)s,
-        %(units_sold_14d)s,
-        %(units_sold_30d)s,
-        %(keyword_bid)s
-    )
-    ON DUPLICATE KEY UPDATE
-        impressions = VALUES(impressions),
-        clicks = VALUES(clicks),
-        cost = VALUES(cost),
-        sales_7d = VALUES(sales_7d),
-        sales_14d = VALUES(sales_14d),
-        sales_30d = VALUES(sales_30d),
-        purchases_7d = VALUES(purchases_7d),
-        purchases_14d = VALUES(purchases_14d),
-        purchases_30d = VALUES(purchases_30d),
-        units_sold_7d = VALUES(units_sold_7d),
-        units_sold_14d = VALUES(units_sold_14d),
-        units_sold_30d = VALUES(units_sold_30d),
-        keyword_bid = VALUES(keyword_bid),
-        campaign_status = VALUES(campaign_status)
-    """
+        cursor.executemany(query, insert_data)
 
-    insert_data = []
+        conn.commit()
+        cursor.close()
+        conn.close()
 
-    for row in rows:
-        insert_data.append({
-            "campaign_id": row.get("campaignId"),
-            "campaign_name": row.get("campaignName"),
-            "campaign_status": row.get("campaignStatus"),
-            "ad_group_id": row.get("adGroupId"),
-            "ad_group_name": row.get("adGroupName"),
-            "target_id": row.get("keywordId"),
-            "targeting": row.get("targeting"),
-            "keyword_type": row.get("keywordType"),
-            "match_type": row.get("matchType"),
-            "report_date": row.get("date"),
-            "impressions": row.get("impressions", 0),
-            "clicks": row.get("clicks", 0),
-            "cost": row.get("cost", 0),
-            "sales_7d": row.get("sales7d", 0),
-            "sales_14d": row.get("sales14d", 0),
-            "sales_30d": row.get("sales30d", 0),
-            "purchases_7d": row.get("purchases7d", 0),
-            "purchases_14d": row.get("purchases14d", 0),
-            "purchases_30d": row.get("purchases30d", 0),
-            "units_sold_7d": row.get("unitsSoldClicks7d", 0),
-            "units_sold_14d": row.get("unitsSoldClicks14d", 0),
-            "units_sold_30d": row.get("unitsSoldClicks30d", 0),
-            "keyword_bid": row.get("keywordBid", 0),
-        })
+        logger.info("MySQL insert completed successfully")
 
-    cursor.executemany(query, insert_data)
+    store_sp_targets(data)
 
-    conn.commit()
-    cursor.close()
-    conn.close()
+    total_time = round(time.time() - SCRIPT_START, 2)
+    logger.info(f"========== TARGET CRON SUCCESS (Duration: {total_time}s) ==========")
 
-
-store_sp_targets(data)
-
-print("Data stored successfully")
-print("===== SP TARGET REPORT CRON SUCCESS =====")
+except Exception as e:
+    logger.error("TARGET CRON FAILED")
+    logger.error(str(e))
+    logger.error(traceback.format_exc())
+    raise

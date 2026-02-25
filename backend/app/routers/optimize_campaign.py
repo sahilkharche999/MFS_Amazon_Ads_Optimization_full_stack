@@ -1,13 +1,20 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from app.database import get_connection
 from openai import OpenAI
-import os, json
+import os, json, time, traceback, logging, re
 import pymysql
 from dotenv import load_dotenv
 
 load_dotenv()
 
 router = APIRouter()
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+)
+
+logger = logging.getLogger("optimize_campaign")
 
 client = OpenAI(
     api_key=os.getenv("OPENROUTER_API_KEY"),
@@ -89,152 +96,188 @@ No text before or after the JSON.
 """
 
 @router.post("/campaign/{campaign_id}/optimize")
-def optimize_campaign(campaign_id: str):
+def optimize_campaign(campaign_id: str, request: Request):
 
-    conn = get_connection()
-    cursor = conn.cursor(pymysql.cursors.DictCursor)
+    start_time = time.time()
 
-    query = """
-        SELECT
-            target_id,
-            targeting,
-            MAX(keyword_bid) AS current_bid,
-            SUM(impressions) AS impressions,
-            SUM(clicks) AS clicks,
-            SUM(cost) AS spend,
-            SUM(sales_7d) AS sales,
-            SUM(purchases_7d) AS purchases
-    FROM sp_targeting_reports
-    WHERE campaign_id = %s
-      AND report_date >= CURDATE() - INTERVAL 14 DAY
-    GROUP BY target_id, targeting
-    """
+    logger.info("========== OPTIMIZE ENDPOINT HIT ==========")
+    logger.info(f"Request URL: {request.url}")
+    logger.info(f"Campaign ID: {campaign_id}")
 
-    cursor.execute(query, (campaign_id,))
-    rows = cursor.fetchall()
-
-    cursor.close()
-    conn.close()
-
-    if not rows:
-        return {"optimization": []}
-
-    entities = []
-
-    for row in rows:
-        impressions = int(row["impressions"] or 0)
-        clicks = int(row["clicks"] or 0)
-        spend = float(row["spend"] or 0)
-        sales = float(row["sales"] or 0)
-        purchases = int(row["purchases"] or 0)
-        current_bid = float(row["current_bid"] or 0)
-
-        ctr = (clicks / impressions) if impressions else 0
-        acos = (spend / sales) if sales else None
-        roas = (sales / spend) if spend else None
-
-        entities.append({
-            "entity": row["targeting"],
-            "current_bid": current_bid,
-            "impressions": impressions,
-            "clicks": clicks,
-            "ctr_percent": round(ctr * 100, 2),
-            "spend": spend,
-            "sales": sales,
-            "purchases": purchases,
-            "acos": round(acos, 3) if acos is not None else None,
-            "roas": round(roas, 3) if roas is not None else None
-        })
-
-    response = client.chat.completions.create(
-        model="openai/gpt-5",
-        temperature=0.2,
-        # response_format={"type": "json_object"},
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": json.dumps(entities)}
-        ]
-    )
-
-    # result = json.loads(response.choices[0].message.content)
-    raw_content = response.choices[0].message.content
-
-    # direct parse
     try:
-        result = json.loads(raw_content)
-    except json.JSONDecodeError:
-        print("⚠️ GPT returned invalid JSON. Raw output below:")
-        print(raw_content)
+        # ================= DATABASE =================
+        logger.info("Opening database connection")
+        conn = get_connection()
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
 
-        # Fallback: attempt to extract JSON array manually
-        import re
-        match = re.search(r"\[.*\]", raw_content, re.DOTALL)
+        logger.info("Executing 14-day aggregation query")
 
-        if match:
+        query = """
+            SELECT
+                target_id,
+                targeting,
+                MAX(keyword_bid) AS current_bid,
+                SUM(impressions) AS impressions,
+                SUM(clicks) AS clicks,
+                SUM(cost) AS spend,
+                SUM(sales_7d) AS sales,
+                SUM(purchases_7d) AS purchases
+        FROM sp_targeting_reports
+        WHERE campaign_id = %s
+          AND report_date >= CURDATE() - INTERVAL 14 DAY
+        GROUP BY target_id, targeting
+        """
+
+        cursor.execute(query, (campaign_id,))
+        rows = cursor.fetchall()
+
+        logger.info(f"Fetched {len(rows)} targeting rows from DB")
+
+        cursor.close()
+        conn.close()
+        logger.info("Database connection closed")
+
+        if not rows:
+            logger.warning("No performance data found for this campaign")
+            return {"optimization": []}
+
+        # ================= PREPARE ENTITIES =================
+        entities = []
+
+        for row in rows:
+            impressions = int(row["impressions"] or 0)
+            clicks = int(row["clicks"] or 0)
+            spend = float(row["spend"] or 0)
+            sales = float(row["sales"] or 0)
+            purchases = int(row["purchases"] or 0)
+            current_bid = float(row["current_bid"] or 0)
+
+            ctr = (clicks / impressions) if impressions else 0
+            acos = (spend / sales) if sales else None
+            roas = (sales / spend) if spend else None
+
+            entities.append({
+                "entity": row["targeting"],
+                "current_bid": current_bid,
+                "impressions": impressions,
+                "clicks": clicks,
+                "ctr_percent": round(ctr * 100, 2),
+                "spend": spend,
+                "sales": sales,
+                "purchases": purchases,
+                "acos": round(acos, 3) if acos is not None else None,
+                "roas": round(roas, 3) if roas is not None else None
+            })
+
+        logger.info(f"Prepared {len(entities)} entities for AI optimization")
+
+        # ================= OPENAI CALL =================
+        logger.info("Calling OpenAI for optimization")
+
+        ai_start = time.time()
+
+        response = client.chat.completions.create(
+            model="openai/gpt-5",
+            temperature=0.2,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": json.dumps(entities)}
+            ]
+        )
+
+        ai_duration = round(time.time() - ai_start, 3)
+        logger.info(f"OpenAI response received in {ai_duration} seconds")
+
+        raw_content = response.choices[0].message.content
+        logger.info(f"Raw AI response length: {len(raw_content)} characters")
+
+        # ================= JSON PARSING =================
+        try:
+            result = json.loads(raw_content)
+            logger.info("AI response parsed successfully (direct JSON)")
+        except json.JSONDecodeError:
+            logger.warning("AI returned invalid JSON. Attempting regex extraction")
+            logger.warning(f"Raw AI Output:\n{raw_content}")
+
+            match = re.search(r"\[.*\]", raw_content, re.DOTALL)
+
+            if match:
+                try:
+                    result = json.loads(match.group())
+                    logger.info("Regex JSON extraction successful")
+                except Exception:
+                    logger.error("Regex JSON extraction failed")
+                    result = []
+            else:
+                logger.error("No JSON array detected in AI response")
+                result = []
+
+        if isinstance(result, str):
             try:
-                result = json.loads(match.group())
+                result = json.loads(result)
             except:
                 result = []
-        else:
+
+        if not isinstance(result, list):
             result = []
 
-   # Step 2: If result is still string, try parsing again 
-    if isinstance(result, str):
-        try:
-            result = json.loads(result)
-        except:
-            result = []
+        cleaned_result = []
+        for item in result:
+            if isinstance(item, dict):
+                cleaned_result.append(item)
+            elif isinstance(item, str):
+                try:
+                    parsed_item = json.loads(item)
+                    if isinstance(parsed_item, dict):
+                        cleaned_result.append(parsed_item)
+                except:
+                    continue
 
-    # Step 3: Ensure result is list
-    if not isinstance(result, list):
-        result = []
+        result = cleaned_result
 
-    if isinstance(result, dict) and "results" in result:
-        result = result["results"]
+        logger.info(f"Final cleaned AI result count: {len(result)}")
 
-    # Step 4: Ensure every item is dict
-    cleaned_result = []
-    for item in result:
-        if isinstance(item, dict):
-            cleaned_result.append(item)
-        elif isinstance(item, str):
-            try:
-                parsed_item = json.loads(item)
-                if isinstance(parsed_item, dict):
-                    cleaned_result.append(parsed_item)
-            except:
+        # ================= MERGE RESULTS =================
+        merged_results = []
+
+        for index, ai_row in enumerate(result):
+
+            if index >= len(entities):
                 continue
 
-    result = cleaned_result
+            matching_entity = entities[index]
 
-    merged_results = []
+            merged_results.append({
+                "entity": matching_entity["entity"],
+                "current_bid": matching_entity["current_bid"],
+                "impressions": matching_entity["impressions"],
+                "clicks": matching_entity["clicks"],
+                "ctr_percent": matching_entity["ctr_percent"],
+                "spend": matching_entity["spend"],
+                "sales": matching_entity["sales"],
+                "purchases": matching_entity["purchases"],
+                "acos": matching_entity["acos"],
+                "roas": matching_entity["roas"],
+                "decision": ai_row.get("decision"),
+                "suggested_bid": ai_row.get("suggested_bid"),
+                "target_roas": ai_row.get("target_roas"),
+                "confidence_score": ai_row.get("confidence_score"),
+                "reasoning": ai_row.get("reasoning")
+            })
 
-    for index, ai_row in enumerate(result):
+        logger.info(f"Merged result count: {len(merged_results)}")
 
-        if index >= len(entities):
-            continue
+        total_time = round(time.time() - start_time, 3)
+        logger.info(f"Optimize endpoint completed in {total_time} seconds")
+        logger.info("========== OPTIMIZE END ==========")
 
-        matching_entity = entities[index]
+        return {
+            "campaign_id": campaign_id,
+            "optimization": merged_results
+        }
 
-        merged_results.append({
-            "entity": matching_entity["entity"],
-            "current_bid": matching_entity["current_bid"],
-            "impressions": matching_entity["impressions"],
-            "clicks": matching_entity["clicks"],
-            "ctr_percent": matching_entity["ctr_percent"],
-            "spend": matching_entity["spend"],
-            "sales": matching_entity["sales"],
-            "purchases": matching_entity["purchases"],
-            "acos": matching_entity["acos"],
-            "roas": matching_entity["roas"],
-            "decision": ai_row.get("decision"),
-            "suggested_bid": ai_row.get("suggested_bid"),
-            "target_roas": ai_row.get("target_roas"),
-            "confidence_score": ai_row.get("confidence_score"),
-            "reasoning": ai_row.get("reasoning")
-        })
-
-    return {
-        "campaign_id": campaign_id,
-        "optimization": merged_results
-    }
+    except Exception as e:
+        logger.error("CRITICAL ERROR in optimize endpoint")
+        logger.error(str(e))
+        logger.error(traceback.format_exc())
+        raise

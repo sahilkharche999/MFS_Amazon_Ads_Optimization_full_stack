@@ -1,58 +1,93 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 import pymysql
 from app.database import get_connection
+import logging
+import traceback
+import time
 
 router = APIRouter()
 
+# Configure logger
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+)
+
+logger = logging.getLogger("campaigns")
+
+
 @router.get("/campaigns")
-def get_campaigns():
-    conn = get_connection()
-    cursor = conn.cursor(pymysql.cursors.DictCursor)
+def get_campaigns(request: Request):
 
-    query = """
-    SELECT 
-        c.campaignId,
-        c.name,
-        c.state,
-        c.startDate,
-        c.endDate,
-        c.budget,
-        c.budgetType,
-        c.targetingType,
+    start_time = time.time()
 
-        CASE
-            WHEN c.targetingType = 'AUTO' THEN 'AUTO'
+    logger.info("========== GET CAMPAIGNS ENDPOINT HIT ==========")
+    logger.info(f"Request URL: {request.url}")
 
-            WHEN c.targetingType = 'MANUAL' 
-                 AND EXISTS (
-                    SELECT 1
-                    FROM sp_targeting_reports t
-                    WHERE t.campaign_id = c.campaignId
-                    AND t.keyword_type = 'TARGETING_EXPRESSION'
-                 )
-            THEN 'PROD'
+    try:
+        logger.info("Opening database connection")
+        conn = get_connection()
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
 
-            WHEN c.targetingType = 'MANUAL' 
-                 AND EXISTS (
-                    SELECT 1
-                    FROM sp_targeting_reports t
-                    WHERE t.campaign_id = c.campaignId
-                    AND t.keyword_type IN ('BROAD','PHRASE','EXACT')
-                 )
-            THEN 'KEY'
+        logger.info("Executing campaigns query")
 
-            ELSE 'UNKNOWN'
-        END AS type
+        query = """
+        SELECT 
+            c.campaignId,
+            c.name,
+            c.state,
+            c.startDate,
+            c.endDate,
+            c.budget,
+            c.budgetType,
+            c.targetingType,
 
-    FROM campaigns c
+            CASE
+                WHEN c.targetingType = 'AUTO' THEN 'AUTO'
 
-    ORDER BY c.startDate DESC
-    """
+                WHEN c.targetingType = 'MANUAL' 
+                     AND EXISTS (
+                        SELECT 1
+                        FROM sp_targeting_reports t
+                        WHERE t.campaign_id = c.campaignId
+                        AND t.keyword_type = 'TARGETING_EXPRESSION'
+                     )
+                THEN 'PROD'
 
-    cursor.execute(query)
-    campaigns = cursor.fetchall()
+                WHEN c.targetingType = 'MANUAL' 
+                     AND EXISTS (
+                        SELECT 1
+                        FROM sp_targeting_reports t
+                        WHERE t.campaign_id = c.campaignId
+                        AND t.keyword_type IN ('BROAD','PHRASE','EXACT')
+                     )
+                THEN 'KEY'
 
-    cursor.close()
-    conn.close()
+                ELSE 'UNKNOWN'
+            END AS type
 
-    return campaigns
+        FROM campaigns c
+
+        ORDER BY c.startDate DESC
+        """
+
+        cursor.execute(query)
+        campaigns = cursor.fetchall()
+
+        logger.info(f"Fetched {len(campaigns)} campaigns from database")
+
+        cursor.close()
+        conn.close()
+        logger.info("Database connection closed")
+
+        execution_time = round(time.time() - start_time, 3)
+        logger.info(f"Get campaigns completed in {execution_time} seconds")
+        logger.info("========== GET CAMPAIGNS END ==========")
+
+        return campaigns
+
+    except Exception as e:
+        logger.error("ERROR in get_campaigns endpoint")
+        logger.error(str(e))
+        logger.error(traceback.format_exc())
+        raise

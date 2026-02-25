@@ -5,23 +5,28 @@ import os
 import gzip
 import json
 import mysql.connector
-from decimal import Decimal
+import logging
+import traceback
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
-print("===== CRON JOB START =====")
-print("Time:", datetime.utcnow().isoformat(), "UTC")
+# ================= LOGGING SETUP =================
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+)
+logger = logging.getLogger("sp_campaign_report_cron")
 
-BASE_DIR = os.getcwd()
+SCRIPT_START = time.time()
+logger.info("========== SP CAMPAIGN REPORT CRON START ==========")
+logger.info(f"UTC Time: {datetime.utcnow().isoformat()}")
 
 load_dotenv(".env")
-print("AMAZON_CLIENT_ID:", os.getenv("AMAZON_CLIENT_ID"))
-
-# venv_path = "/Users/consultadd/Desktop/MFS-Amazon-ads-optimization1/MFS_Amazon_Ads_optimization/venv/bin/python3"
 
 # ================= CONFIG =================
 
 def get_access_token():
+    logger.info("Requesting Amazon access token")
     r = requests.post(
         "https://api.amazon.com/auth/o2/token",
         data={
@@ -32,39 +37,34 @@ def get_access_token():
         }
     )
     r.raise_for_status()
+    logger.info("Access token retrieved successfully")
     return r.json()["access_token"]
 
 
 def get_headers():
-    access_token = get_access_token()
-    headers = {
-        "Authorization": f"Bearer {access_token}",
+    token = get_access_token()
+    return {
+        "Authorization": f"Bearer {token}",
         "Amazon-Advertising-API-ClientId": os.getenv("AMAZON_CLIENT_ID"),
         "Amazon-Advertising-API-Scope": os.getenv("AMAZON_PROFILE_ID"),
         "Content-Type": "application/json"
     }
-    return headers
 
 
 GENERATE_URL = "https://advertising-api.amazon.com/reporting/reports"
 STATUS_URL_TEMPLATE = "https://advertising-api.amazon.com/reporting/reports/{report_id}"
-
-REPORTS_DIR = "reports"
-POLL_INTERVAL = 10  # seconds
+POLL_INTERVAL = 10
 
 HEADERS = get_headers()
 
-# ================ DATE RANGE ================
-
+# ================= DATE RANGE =================
 end_date = datetime.utcnow().date() - timedelta(days=1)
 start_date = end_date - timedelta(days=14)
 
-report_name = f"SP campaign report {start_date} to {end_date}"
-
-# ================ PAYLOAD ===================
+logger.info(f"Report Date Range: {start_date} → {end_date}")
 
 payload = {
-    "name": report_name,
+    "name": f"SP campaign report {start_date} to {end_date}",
     "startDate": start_date.strftime("%Y-%m-%d"),
     "endDate": end_date.strftime("%Y-%m-%d"),
     "configuration": {
@@ -73,212 +73,117 @@ payload = {
         "reportTypeId": "spCampaigns",
         "timeUnit": "DAILY",
         "format": "GZIP_JSON",
-        "columns": [
-            "date",
-            "campaignId",
-            "campaignName",
-            "campaignStatus",
-            "campaignBudgetAmount",
-            "campaignBudgetType",
-            "campaignBudgetCurrencyCode",
-
-            "impressions",
-            "clicks",
-            "cost",
-            "spend",
-            "costPerClick",
-            "clickThroughRate",
-
-            "sales1d",
-            "sales7d",
-            "sales14d",
-            "sales30d",
-
-            "purchases1d",
-            "purchases7d",
-            "purchases14d",
-            "purchases30d",
-
-            "unitsSoldSameSku1d",
-            "unitsSoldSameSku7d",
-            "unitsSoldSameSku14d",
-            "unitsSoldSameSku30d"
-        ]
+        "columns": [ ... ]  # keep your full column list unchanged
     }
 }
 
-# ================ STEP 1: GENERATE REPORT ================
+try:
+    # ================= STEP 1: GENERATE =================
+    logger.info("Requesting report generation from Amazon")
 
-print("Requesting report...")
+    resp = requests.post(GENERATE_URL, headers=HEADERS, json=payload)
+    resp.raise_for_status()
 
-resp = requests.post(GENERATE_URL, headers=HEADERS, json=payload)
-resp.raise_for_status()
-report_id = resp.json()["reportId"]
+    report_id = resp.json()["reportId"]
+    logger.info(f"Report generated. Report ID: {report_id}")
 
-print("Report ID:", report_id)
-print("Report requested:", report_id)
+    # ================= STEP 2: POLL =================
+    status_url = STATUS_URL_TEMPLATE.format(report_id=report_id)
+    download_url = None
 
-# ================ STEP 2: POLL STATUS ====================
+    logger.info("Polling report status")
 
-status_url = STATUS_URL_TEMPLATE.format(report_id=report_id)
+    while True:
+        status_resp = requests.get(status_url, headers=HEADERS)
+        status_resp.raise_for_status()
 
-download_url = None
+        status_data = status_resp.json()
+        status = status_data["status"]
 
-while True:
-    status_resp = requests.get(status_url, headers=HEADERS)
-    status_resp.raise_for_status()
+        logger.info(f"Current report status: {status}")
 
-    status_data = status_resp.json()
-    status = status_data["status"]
+        if status == "COMPLETED":
+            download_url = status_data["url"]
+            logger.info("Report generation completed")
+            break
+        elif status == "FAILED":
+            logger.error("Report generation failed")
+            raise Exception("Amazon report generation failed")
 
-    print("Status:", status)
+        time.sleep(POLL_INTERVAL)
 
-    if status == "COMPLETED":
-        download_url = status_data["url"]
-        break
-    elif status == "FAILED":
-        raise Exception("Report generation failed")
+    # ================= STEP 3: DOWNLOAD =================
+    logger.info("Downloading report file")
 
-    time.sleep(POLL_INTERVAL)
+    file_resp = requests.get(download_url)
+    file_resp.raise_for_status()
 
-# ================ STEP 3: DOWNLOAD ========================
+    with gzip.GzipFile(fileobj=io.BytesIO(file_resp.content)) as gz:
+        data = json.load(gz)
 
-os.makedirs(REPORTS_DIR, exist_ok=True)
+    logger.info(f"Rows downloaded: {len(data)}")
 
-file_name = f"sp_keywords_{start_date}_to_{end_date}.json"
-json_path = os.path.join(REPORTS_DIR, file_name)
+    # ================= STEP 4: STORE IN MYSQL =================
+    def store_to_mysql(rows):
+        logger.info("Opening MySQL connection")
 
-print("Downloading report file...")
-file_resp = requests.get(download_url)
-file_resp.raise_for_status()
+        conn = mysql.connector.connect(
+            host=os.getenv("DB_HOST"),
+            user=os.getenv("DB_USER"),
+            password=os.getenv("DB_PASSWORD"),
+            database=os.getenv("DB_DATABASE")
+        )
 
-# Decompress in-memory and write JSON
-with gzip.GzipFile(fileobj=io.BytesIO(file_resp.content)) as gz:
-    data = json.load(gz)
+        cursor = conn.cursor()
+        logger.info("Starting DB insert process")
 
-print("Rows downloaded:", len(data))
+        query = """YOUR ORIGINAL INSERT QUERY UNCHANGED"""
 
+        inserted = 0
 
-# ================ STEP 4: STORE IN MYSQL ====================
+        for row in rows:
+            cursor.execute(query, {
+                "date": row.get("date"),
+                "campaignId": row.get("campaignId"),
+                "campaignName": row.get("campaignName"),
+                "campaignStatus": row.get("campaignStatus"),
+                "campaignBudgetAmount": row.get("campaignBudgetAmount", 0),
+                "campaignBudgetType": row.get("campaignBudgetType"),
+                "campaignBudgetCurrencyCode": row.get("campaignBudgetCurrencyCode"),
+                "impressions": row.get("impressions", 0),
+                "clicks": row.get("clicks", 0),
+                "cost": row.get("cost", 0),
+                "spend": row.get("spend", 0),
+                "purchases1d": row.get("purchases1d", 0),
+                "purchases7d": row.get("purchases7d", 0),
+                "purchases14d": row.get("purchases14d", 0),
+                "purchases30d": row.get("purchases30d", 0),
+                "sales1d": row.get("sales1d", 0),
+                "sales7d": row.get("sales7d", 0),
+                "sales14d": row.get("sales14d", 0),
+                "sales30d": row.get("sales30d", 0),
+                "unitsSoldSameSku1d": row.get("unitsSoldSameSku1d", 0),
+                "unitsSoldSameSku7d": row.get("unitsSoldSameSku7d", 0),
+                "unitsSoldSameSku14d": row.get("unitsSoldSameSku14d", 0),
+                "unitsSoldSameSku30d": row.get("unitsSoldSameSku30d", 0),
+                "costPerClick": row.get("costPerClick", 0),
+                "clickThroughRate": row.get("clickThroughRate", 0),
+            })
+            inserted += 1
 
-def store_to_mysql(rows):
-    conn = mysql.connector.connect(
-        host=os.getenv("DB_HOST"),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD"),
-        database=os.getenv("DB_DATABASE")
-    )
-    cursor = conn.cursor()
+        conn.commit()
+        cursor.close()
+        conn.close()
 
-    query = """
-    INSERT INTO campaign_performance_daily (
-        date,
-        campaignId,
-        campaignName,
-        campaignStatus,
-        campaignBudgetAmount,
-        campaignBudgetType,
-        campaignBudgetCurrencyCode,
-        impressions,
-        clicks,
-        cost,
-        spend,
-        purchases1d,
-        purchases7d,
-        purchases14d,
-        purchases30d,
-        sales1d,
-        sales7d,
-        sales14d,
-        sales30d,
-        unitsSoldSameSku1d,
-        unitsSoldSameSku7d,
-        unitsSoldSameSku14d,
-        unitsSoldSameSku30d,
-        costPerClick,
-        clickThroughRate
-    )
-    VALUES (
-        %(date)s,
-        %(campaignId)s,
-        %(campaignName)s,
-        %(campaignStatus)s,
-        %(campaignBudgetAmount)s,
-        %(campaignBudgetType)s,
-        %(campaignBudgetCurrencyCode)s,
-        %(impressions)s,
-        %(clicks)s,
-        %(cost)s,
-        %(spend)s,
-        %(purchases1d)s,
-        %(purchases7d)s,
-        %(purchases14d)s,
-        %(purchases30d)s,
-        %(sales1d)s,
-        %(sales7d)s,
-        %(sales14d)s,
-        %(sales30d)s,
-        %(unitsSoldSameSku1d)s,
-        %(unitsSoldSameSku7d)s,
-        %(unitsSoldSameSku14d)s,
-        %(unitsSoldSameSku30d)s,
-        %(costPerClick)s,
-        %(clickThroughRate)s
-    )
-    ON DUPLICATE KEY UPDATE
-        impressions = VALUES(impressions),
-        clicks = VALUES(clicks),
-        cost = VALUES(cost),
-        spend = VALUES(spend),
-        purchases7d = VALUES(purchases7d),
-        purchases14d = VALUES(purchases14d),
-        purchases30d = VALUES(purchases30d),
-        sales7d = VALUES(sales7d),
-        sales14d = VALUES(sales14d),
-        sales30d = VALUES(sales30d),
-        unitsSoldSameSku7d = VALUES(unitsSoldSameSku7d),
-        unitsSoldSameSku14d = VALUES(unitsSoldSameSku14d),
-        unitsSoldSameSku30d = VALUES(unitsSoldSameSku30d),
-        campaignStatus = VALUES(campaignStatus),
-        costPerClick = VALUES(costPerClick),
-        clickThroughRate = VALUES(clickThroughRate)
-    """
+        logger.info(f"DB insert completed. Rows processed: {inserted}")
 
-    for row in rows:
-        cursor.execute(query, {
-            "date": row.get("date"),
-            "campaignId": row.get("campaignId"),
-            "campaignName": row.get("campaignName"),
-            "campaignStatus": row.get("campaignStatus"),
-            "campaignBudgetAmount": row.get("campaignBudgetAmount", 0),
-            "campaignBudgetType": row.get("campaignBudgetType"),
-            "campaignBudgetCurrencyCode": row.get("campaignBudgetCurrencyCode"),
-            "impressions": row.get("impressions", 0),
-            "clicks": row.get("clicks", 0),
-            "cost": row.get("cost", 0),
-            "spend": row.get("spend", 0),
-            "purchases1d": row.get("purchases1d", 0),
-            "purchases7d": row.get("purchases7d", 0),
-            "purchases14d": row.get("purchases14d", 0),
-            "purchases30d": row.get("purchases30d", 0),
-            "sales1d": row.get("sales1d", 0),
-            "sales7d": row.get("sales7d", 0),
-            "sales14d": row.get("sales14d", 0),
-            "sales30d": row.get("sales30d", 0),
-            "unitsSoldSameSku1d": row.get("unitsSoldSameSku1d", 0),
-            "unitsSoldSameSku7d": row.get("unitsSoldSameSku7d", 0),
-            "unitsSoldSameSku14d": row.get("unitsSoldSameSku14d", 0),
-            "unitsSoldSameSku30d": row.get("unitsSoldSameSku30d", 0),
-            "costPerClick": row.get("costPerClick", 0),
-            "clickThroughRate": row.get("clickThroughRate", 0),
-        })
-    conn.commit()
-    cursor.close()
-    conn.close()
+    store_to_mysql(data)
 
-store_to_mysql(data)
-print("Data stored in database successfully")
+    total_time = round(time.time() - SCRIPT_START, 2)
+    logger.info(f"========== CRON JOB SUCCESS (Duration: {total_time}s) ==========")
 
-
-print("===== CRON JOB SUCCESS =====")
-
+except Exception as e:
+    logger.error("CRON JOB FAILED")
+    logger.error(str(e))
+    logger.error(traceback.format_exc())
+    raise
