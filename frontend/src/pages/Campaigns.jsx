@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Container, Typography, Button, Box, Paper, Chip, Dialog, DialogTitle, DialogContent, DialogActions, CircularProgress } from "@mui/material";
+import { Typography, Button, Box, Paper, Chip, Dialog, DialogTitle, DialogContent, DialogActions, CircularProgress } from "@mui/material";
 import { DataGrid } from "@mui/x-data-grid";
 import api from "../services/api";
 
@@ -67,7 +67,7 @@ function Campaigns() {
             >
               View Targets
             </Button>
-      
+
             {/* Optimize Campaign Button */}
             <Button
               variant="outlined"

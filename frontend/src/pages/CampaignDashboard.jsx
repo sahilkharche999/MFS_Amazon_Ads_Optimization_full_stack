@@ -4,7 +4,7 @@ import {
   Container,
   Typography,
   Grid,
-  Paper, 
+  Paper,
   Box
 } from "@mui/material";
 import { DataGrid } from "@mui/x-data-grid";
@@ -29,6 +29,7 @@ import api from "../services/api";
 
 function CampaignDashboard() {
   const { campaignId } = useParams();
+  const theme = useTheme();
 
   const [data, setData] = useState([]);
   const [campaignName, setCampaignName] = useState("");
@@ -42,8 +43,140 @@ function CampaignDashboard() {
     cpo: 0
   });
   const [trendData, setTrendData] = useState([]);
-  const theme = useTheme();
 
+  // ===============================
+  // Generate 14 Day Base Template
+  // ===============================
+    const generateLast14Days = () => {
+      const days = [];
+      const start = new Date("2026-02-03");
+      const end = new Date("2026-02-16");
+    
+      const current = new Date(start);
+    
+      while (current <= end) {
+        days.push({
+          date: current.toISOString().split("T")[0],
+          impressions: 0,
+          clicks: 0,
+          spend: 0,
+          orders: 0
+        });
+    
+        current.setDate(current.getDate() + 1);
+      }
+      return days;
+    };
+
+
+  // const generateLast14Days = () => {
+  //   const days = [];
+  //   const today = new Date();
+
+  //   for (let i = 13; i >= 0; i--) {
+  //     const d = new Date();
+  //     d.setDate(today.getDate() - i);
+
+  //     days.push({
+  //       date: d.toISOString().split("T")[0],
+  //       impressions: 0,
+  //       clicks: 0,
+  //       spend: 0,
+  //       orders: 0
+  //     });
+  //   }
+
+  //   return days;
+  // };
+
+  // ===============================
+  // Normalize Trend Data
+  // ===============================
+  const normalizedTrendData = useMemo(() => {
+    const base = generateLast14Days();
+
+    if (!trendData || trendData.length === 0) {
+      return base;
+    }
+
+    return base.map(day => {
+      const found = trendData.find(d => d.date === day.date);
+
+      return found
+        ? {
+            ...day,
+            impressions: found.impressions || 0,
+            clicks: found.clicks || 0,
+            spend: found.spend || 0,
+            orders: found.orders || 0
+          }
+        : day;
+    });
+  }, [trendData]);
+
+  const isAllZero = normalizedTrendData.every(
+    d =>
+      d.impressions === 0 &&
+      d.clicks === 0 &&
+      d.spend === 0 &&
+      d.orders === 0
+  );
+
+  // ===============================
+  // Fetch Data
+  // ===============================
+  useEffect(() => {
+    const endDate = "2026-02-16";
+    const startDate = "2026-02-03";
+
+    api.get(`/campaign/${campaignId}/dashboard`, {
+      params: { start_date: startDate, end_date: endDate }
+    })
+      .then(res => {
+        setCampaignName(res.data.campaign_name);
+        setType(res.data.type);
+        setData(res.data.data);
+        setSummary(res.data.summary || {});
+        setTrendData(res.data.trend || []);
+      })
+      .catch(err => console.error(err));
+  }, [campaignId]);
+
+  /* =========================================================
+   FUTURE: ENABLE ROLLING LAST 14 DAYS
+
+      useEffect(() => {
+        const today = new Date();
+
+        const end = new Date();
+        end.setDate(today.getDate() - 1);
+
+        const start = new Date(end);
+        start.setDate(end.getDate() - 13);
+
+        const endDate = end.toISOString().split("T")[0];
+        const startDate = start.toISOString().split("T")[0];
+
+        api.get(`/campaign/${campaignId}/dashboard`, {
+          params: { start_date: startDate, end_date: endDate }
+        })
+          .then(res => {
+            setCampaignName(res.data.campaign_name);
+            setType(res.data.type);
+            setData(res.data.data);
+            setSummary(res.data.summary || {});
+            setTrendData(res.data.trend || []);
+          })
+          .catch(err => console.error(err));
+
+      }, [campaignId]);
+
+  ========================================================= */
+
+
+  // ===============================
+  // KPI Cards
+  // ===============================
   const kpis = [
     {
       label: "Spend",
@@ -82,38 +215,10 @@ function CampaignDashboard() {
       color: "#0288d1"
     }
   ];
-  
 
-
-  useEffect(() => {
-    // const today = new Date();
-    // const endDate = today.toISOString().split("T")[0];
-
-    // const start = new Date();
-    // start.setDate(today.getDate() - 14);
-    // const startDate = start.toISOString().split("T")[0];
-
-    
-    // Demo period (Fixed 14-day window)
-    const endDate = "2026-02-16";
-    const startDate = "2026-02-02";
-
-    api.get(`/campaign/${campaignId}/dashboard`, {
-      params: { start_date: startDate, end_date: endDate }
-    })
-    .then(res => {
-      setCampaignName(res.data.campaign_name);
-      setType(res.data.type);
-      setData(res.data.data);
-      setSummary(res.data.summary || {});
-      setTrendData(res.data.trend || []);
-
-      console.log("Fetched campaign dashboard data:", res.data);
-    })
-    .catch(err => console.error(err));
-
-  }, [campaignId]);
-
+  // ===============================
+  // Table Columns
+  // ===============================
   const columns = [
     {
       field: "entityText",
@@ -127,30 +232,23 @@ function CampaignDashboard() {
           : "Entity",
       flex: 1.5
     },
-  
     {
       field: "bid",
       headerName: "Bid ($)",
       flex: 0.7,
-      renderCell: (params) => {
-        if (params.value === null || params.value === undefined) {
-          return "-";
-        }
-        return `$${Number(params.value).toFixed(2)}`;
-      }
+      renderCell: (params) =>
+        params.value !== null && params.value !== undefined
+          ? `$${Number(params.value).toFixed(2)}`
+          : "-"
     },
-  
     { field: "impressions", headerName: "Impressions", flex: 0.8 },
-  
     { field: "clicks", headerName: "Clicks", flex: 0.7 },
-  
     {
       field: "ctr_percent",
       headerName: "Click Through %",
       flex: 0.8,
       renderCell: (params) => `${params.value || 0}%`
     },
-  
     {
       field: "ad_spend",
       headerName: "Ad Spend ($)",
@@ -158,9 +256,7 @@ function CampaignDashboard() {
       renderCell: (params) =>
         `$${Number(params.value || 0).toFixed(2)}`
     },
-  
     { field: "purchases", headerName: "Purchases", flex: 0.7 },
-  
     {
       field: "cost_per_order",
       headerName: "Cost per Order",
@@ -172,7 +268,6 @@ function CampaignDashboard() {
     }
   ];
 
-
   return (
     <Container maxWidth="xl" sx={{ mt: 4 }}>
       <Typography variant="h4" gutterBottom>
@@ -180,67 +275,27 @@ function CampaignDashboard() {
       </Typography>
 
       {type && (
-      <Typography
-        variant="subtitle1"
-        gutterBottom
-        sx={{
-          opacity: 0.7,
-          fontWeight: 400,
-          letterSpacing: 0.3
-        }}
-      >
-        {type} Campaign – Last 14 Days
-      </Typography>
-    )}
-
+        <Typography
+          variant="subtitle1"
+          gutterBottom
+          sx={{ opacity: 0.7, fontWeight: 400 }}
+        >
+          {type} Campaign – Last 14 Days
+        </Typography>
+      )}
 
       {/* KPI Cards */}
       <Grid container spacing={2} sx={{ mb: 4 }}>
         {kpis.map((item, index) => (
           <Grid item xs={12} md={2} key={index}>
-            <Paper
-              elevation={0}
-              sx={{
-                p: 2.5,
-                borderRadius: 1,
-                height: 90,
-                display: "flex",
-                flexDirection: "column",
-                justifyContent: "center",
-                backdropFilter: "blur(8px)",
-                background:
-                  theme.palette.mode === "dark"
-                    ? "rgba(255,255,255,0.04)"
-                    : "rgba(0,0,0,0.03)",
-                border:
-                  theme.palette.mode === "dark"
-                    ? "1px solid rgba(255,255,255,0.08)"
-                    : "1px solid rgba(0,0,0,0.06)",
-                transition: "all 0.25s ease",
-                "&:hover": {
-                  transform: "translateY(-4px)",
-                  boxShadow:
-                    theme.palette.mode === "dark"
-                      ? "0px 6px 24px rgba(0,0,0,0.4)"
-                      : "0px 6px 20px rgba(0,0,0,0.08)"
-                }
-              }}
-            >
+            <Paper sx={{ p: 2.5 }}>
               <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                <Box sx={{ color: item.color }}>
-                  {item.icon}
-                </Box>
-
-                <Typography
-                  variant="caption"
-                  color="text.secondary"
-                  sx={{ fontWeight: 500 }}
-                >
+                <Box sx={{ color: item.color }}>{item.icon}</Box>
+                <Typography variant="caption">
                   {item.label}
                 </Typography>
               </Box>
-
-              <Typography variant="h5" fontWeight="bold" sx={{ mt: 0.5 }}>
+              <Typography variant="h5" fontWeight="bold">
                 {item.value}
               </Typography>
             </Paper>
@@ -248,15 +303,14 @@ function CampaignDashboard() {
         ))}
       </Grid>
 
-        
-      {/* 14 day trend */}
-      <Paper sx={{ p: 3, mb: 4, borderRadius: 3 }}>
+      {/* Trend Chart */}
+      <Paper sx={{ p: 3, mb: 4, borderRadius: 3, position: "relative" }}>
         <Typography variant="h6" gutterBottom>
           14 Day Campaign Trend
         </Typography>
 
         <ResponsiveContainer width="100%" height={300}>
-          <LineChart data={trendData}>
+          <LineChart data={normalizedTrendData}>
             <CartesianGrid strokeDasharray="3 3" />
             <XAxis dataKey="date" />
             <YAxis />
@@ -267,45 +321,26 @@ function CampaignDashboard() {
             <Line type="monotone" dataKey="orders" stroke="#9c27b0" />
           </LineChart>
         </ResponsiveContainer>
+
+        {isAllZero && (
+          <Typography
+            variant="body2"
+            sx={{
+              position: "absolute",
+              top: "50%",
+              left: "50%",
+              transform: "translate(-50%, -50%)",
+              color: "text.secondary"
+            }}
+          >
+            No data available for this period
+          </Typography>
+        )}
       </Paper>
 
-      {/* Targets report */}
-      <Paper sx={{ height: 650, borderRadius: 1 }}>
+      {/* Targets Table */}
+      <Paper sx={{ height: 650 }}>
         <DataGrid
-          sx={{
-            border: "none",
-          
-            "& .MuiDataGrid-columnHeaders": {
-              background:
-                theme =>
-                  theme.palette.mode === "dark"
-                    ? "rgba(255,255,255,0.03)"
-                    : "rgba(0,0,0,0.03)",
-              backdropFilter: "blur(6px)",
-              borderBottom: "1px solid rgba(255,255,255,0.08)",
-              fontWeight: 600,
-              letterSpacing: "0.4px",
-              fontSize: "13px"
-            },
-          
-            "& .MuiDataGrid-cell": {
-              borderBottom: "1px solid rgba(255,255,255,0.05)",
-              paddingTop: "10px",
-              paddingBottom: "10px"
-            },
-
-            "& .MuiDataGrid-columnSeparator": {
-              opacity: 0.2
-            },
-          
-            "& .MuiDataGrid-row:hover": {
-              background:
-                theme =>
-                  theme.palette.mode === "dark"
-                    ? "rgba(255,255,255,0.02)"
-                    : "rgba(0,0,0,0.02)"
-            }
-          }}
           rows={data}
           columns={columns}
           getRowId={(row) => row.entityId}
