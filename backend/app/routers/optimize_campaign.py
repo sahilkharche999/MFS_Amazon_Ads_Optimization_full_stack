@@ -45,6 +45,15 @@ roas > 3 → scale or increase_bid
 roas 2-3 → hold
 roas < 2 and sales > 0 → decrease_bid
 
+TARGET ROAS:
+Must ALWAYS be numeric
+Never null
+Strategic (not computed)
+increase/scale → 2.5-3.5 typical
+hold → near current ROAS
+decrease → 3-4+
+pause/negative → 4+
+
 Analyze performance holistically. Consider:
 - Visibility
 - Conversion efficiency
@@ -152,9 +161,9 @@ def optimize_campaign(campaign_id: str, request: Request):
             purchases = int(row["purchases"] or 0)
             current_bid = float(row["current_bid"] or 0)
 
-            ctr = (clicks / impressions) if impressions else 0
-            acos = (spend / sales) if sales else None
-            roas = (sales / spend) if spend else None
+        ctr = (clicks / impressions) if impressions else 0
+        acos = (spend / sales) if sales else 0
+        roas = (sales / spend) if spend else 0
 
             entities.append({
                 "entity": row["targeting"],
