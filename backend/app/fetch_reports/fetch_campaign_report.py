@@ -27,16 +27,18 @@ load_dotenv(".env")
 
 def get_access_token():
     logger.info("Requesting Amazon access token")
+    data = {
+        "grant_type": "refresh_token",
+        "refresh_token": os.getenv("AMAZON_REFRESH_TOKEN"),
+        "client_id": os.getenv("AMAZON_CLIENT_ID"),
+        "client_secret": os.getenv("AMAZON_CLIENT_SECRET")
+    }
     r = requests.post(
         "https://api.amazon.com/auth/o2/token",
-        data={
-            "grant_type": "refresh_token",
-            "refresh_token": os.getenv("AMAZON_REFRESH_TOKEN"),
-            "client_id": os.getenv("AMAZON_CLIENT_ID"),
-            "client_secret": os.getenv("AMAZON_CLIENT_SECRET")
-        },
+        data=data,
         headers={"Content-Type": "application/x-www-form-urlencoded"}
     )
+    logger.info(f"data = {data}")
     logger.info(r.text)
     r.raise_for_status()
     logger.info("Access token retrieved successfully")
