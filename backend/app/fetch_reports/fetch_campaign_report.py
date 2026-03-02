@@ -37,6 +37,7 @@ def get_access_token():
         },
         headers={"Content-Type": "application/x-www-form-urlencoded"}
     )
+    logger.info(r.text)
     r.raise_for_status()
     logger.info("Access token retrieved successfully")
     return r.json()["access_token"]
