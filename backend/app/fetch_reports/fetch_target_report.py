@@ -21,7 +21,7 @@ SCRIPT_START = time.time()
 logger.info("========== SP TARGET REPORT CRON START ==========")
 logger.info(f"UTC Time: {datetime.utcnow().isoformat()}")
 
-load_dotenv(".env")
+load_dotenv("../../../.env")
 
 # ================= AMAZON AUTH =================
 
