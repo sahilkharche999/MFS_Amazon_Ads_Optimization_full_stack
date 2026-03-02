@@ -34,7 +34,8 @@ def get_access_token():
             "refresh_token": os.getenv("AMAZON_REFRESH_TOKEN"),
             "client_id": os.getenv("AMAZON_CLIENT_ID"),
             "client_secret": os.getenv("AMAZON_CLIENT_SECRET")
-        }
+        },
+        headers={"Content-Type": "application/x-www-form-urlencoded"}
     )
     r.raise_for_status()
     logger.info("Access token retrieved successfully")
