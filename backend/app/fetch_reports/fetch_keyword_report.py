@@ -21,7 +21,7 @@ SCRIPT_START = time.time()
 logger.info("========== SP KEYWORD REPORT CRON START ==========")
 logger.info(f"UTC Time: {datetime.utcnow().isoformat()}")
 
-load_dotenv("../../../.env")
+load_dotenv("../../.env")
 
 # ================= CONFIG =================
 
@@ -69,11 +69,21 @@ payload = {
     "endDate": end_date.strftime("%Y-%m-%d"),
     "configuration": {
         "adProduct": "SPONSORED_PRODUCTS",
-        "groupBy": ["adGroup"],
-        "reportTypeId": "spKeywords",
+        "groupBy": ["targeting"],
+        "reportTypeId": "spTargeting",
         "timeUnit": "DAILY",
         "format": "GZIP_JSON",
-        "columns": [ ... ]  # keep your full column list unchanged
+        "columns": [
+            "date", "keywordId", "keyword", "matchType", "campaignId", "campaignName", 
+            "adGroupId", "adGroupName", "impressions", "clicks", "cost", "campaignBudgetAmount", 
+            "campaignBudgetCurrencyCode", "campaignStatus", "keywordBid", "adKeywordStatus",
+            "purchases1d", "purchases7d", "purchases14d", "purchases30d", 
+            "sales1d", "sales7d", "sales14d", "sales30d", 
+            "unitsSoldClicks1d", "unitsSoldClicks7d", "unitsSoldClicks14d", "unitsSoldClicks30d",
+            "attributedSalesSameSku1d", "attributedSalesSameSku7d", "attributedSalesSameSku14d", "attributedSalesSameSku30d",
+            "unitsSoldSameSku1d", "unitsSoldSameSku7d", "unitsSoldSameSku14d", "unitsSoldSameSku30d",
+            "topOfSearchImpressionShare"
+        ]
     }
 }
 
@@ -137,12 +147,98 @@ try:
 
         logger.info("Starting keyword DB insert process")
 
-        query = """YOUR ORIGINAL INSERT QUERY UNCHANGED"""
+        query = """
+            INSERT INTO keyword_performance_full (
+                date, keywordId, keywordText, match_type, campaignId, campaignName, 
+                adGroupId, adGroupName, impressions, clicks, cost, campaignBudget, 
+                campaignBudgetCurrencyCode, campaignStatus, keywordBid, adKeywordStatus,
+                purchases1d, purchases7d, purchases14d, purchases30d, 
+                sales1d, sales7d, sales14d, sales30d, 
+                unitsSoldClicks1d, unitsSoldClicks7d, unitsSoldClicks14d, unitsSoldClicks30d,
+                attributedSalesSameSku1d, attributedSalesSameSku7d, attributedSalesSameSku14d, attributedSalesSameSku30d,
+                unitsSoldSameSku1d, unitsSoldSameSku7d, unitsSoldSameSku14d, unitsSoldSameSku30d,
+                topOfSearchImpressionShare
+            ) VALUES (
+                %(date)s, %(keywordId)s, %(keywordText)s, %(match_type)s, %(campaignId)s, %(campaignName)s, 
+                %(adGroupId)s, %(adGroupName)s, %(impressions)s, %(clicks)s, %(cost)s, %(campaignBudget)s, 
+                %(campaignBudgetCurrencyCode)s, %(campaignStatus)s, %(keywordBid)s, %(adKeywordStatus)s,
+                %(purchases1d)s, %(purchases7d)s, %(purchases14d)s, %(purchases30d)s, 
+                %(sales1d)s, %(sales7d)s, %(sales14d)s, %(sales30d)s, 
+                %(unitsSoldClicks1d)s, %(unitsSoldClicks7d)s, %(unitsSoldClicks14d)s, %(unitsSoldClicks30d)s,
+                %(attributedSalesSameSku1d)s, %(attributedSalesSameSku7d)s, %(attributedSalesSameSku14d)s, %(attributedSalesSameSku30d)s,
+                %(unitsSoldSameSku1d)s, %(unitsSoldSameSku7d)s, %(unitsSoldSameSku14d)s, %(unitsSoldSameSku30d)s,
+                %(topOfSearchImpressionShare)s
+            )
+            ON DUPLICATE KEY UPDATE
+                keywordText=VALUES(keywordText),
+                match_type=VALUES(match_type),
+                campaignName=VALUES(campaignName),
+                adGroupName=VALUES(adGroupName),
+                impressions=VALUES(impressions),
+                clicks=VALUES(clicks),
+                cost=VALUES(cost),
+                campaignBudget=VALUES(campaignBudget),
+                campaignBudgetCurrencyCode=VALUES(campaignBudgetCurrencyCode),
+                campaignStatus=VALUES(campaignStatus),
+                keywordBid=VALUES(keywordBid),
+                adKeywordStatus=VALUES(adKeywordStatus),
+                purchases1d=VALUES(purchases1d),
+                purchases7d=VALUES(purchases7d),
+                purchases14d=VALUES(purchases14d),
+                purchases30d=VALUES(purchases30d),
+                sales1d=VALUES(sales1d),
+                sales7d=VALUES(sales7d),
+                sales14d=VALUES(sales14d),
+                sales30d=VALUES(sales30d),
+                unitsSoldClicks1d=VALUES(unitsSoldClicks1d),
+                unitsSoldClicks7d=VALUES(unitsSoldClicks7d),
+                unitsSoldClicks14d=VALUES(unitsSoldClicks14d),
+                unitsSoldClicks30d=VALUES(unitsSoldClicks30d),
+                topOfSearchImpressionShare=VALUES(topOfSearchImpressionShare);
+        """
 
         processed = 0
 
         for row in rows:
-            cursor.execute(query, row)
+            cursor.execute(query, {
+                "date": row.get("date"),
+                "keywordId": row.get("keywordId"),
+                "keywordText": row.get("keyword"), # CORRECTED NAME
+                "match_type": row.get("matchType"),
+                "campaignId": row.get("campaignId"),
+                "campaignName": row.get("campaignName"),
+                "adGroupId": row.get("adGroupId"),
+                "adGroupName": row.get("adGroupName"),
+                "impressions": row.get("impressions", 0),
+                "clicks": row.get("clicks", 0),
+                "cost": row.get("cost", 0),
+                "campaignBudget": row.get("campaignBudgetAmount", 0), # CORRECTED NAME
+                "campaignBudgetCurrencyCode": row.get("campaignBudgetCurrencyCode"),
+                "campaignStatus": row.get("campaignStatus"),
+                "keywordBid": row.get("keywordBid", 0),
+                "adKeywordStatus": row.get("adKeywordStatus"),
+                "purchases1d": row.get("purchases1d", 0),
+                "purchases7d": row.get("purchases7d", 0),
+                "purchases14d": row.get("purchases14d", 0),
+                "purchases30d": row.get("purchases30d", 0),
+                "sales1d": row.get("sales1d", 0),
+                "sales7d": row.get("sales7d", 0),
+                "sales14d": row.get("sales14d", 0),
+                "sales30d": row.get("sales30d", 0),
+                "unitsSoldClicks1d": row.get("unitsSoldClicks1d", 0),
+                "unitsSoldClicks7d": row.get("unitsSoldClicks7d", 0),
+                "unitsSoldClicks14d": row.get("unitsSoldClicks14d", 0),
+                "unitsSoldClicks30d": row.get("unitsSoldClicks30d", 0),
+                "attributedSalesSameSku1d": row.get("attributedSalesSameSku1d", 0),
+                "attributedSalesSameSku7d": row.get("attributedSalesSameSku7d", 0),
+                "attributedSalesSameSku14d": row.get("attributedSalesSameSku14d", 0),
+                "attributedSalesSameSku30d": row.get("attributedSalesSameSku30d", 0),
+                "unitsSoldSameSku1d": row.get("unitsSoldSameSku1d", 0),
+                "unitsSoldSameSku7d": row.get("unitsSoldSameSku7d", 0),
+                "unitsSoldSameSku14d": row.get("unitsSoldSameSku14d", 0),
+                "unitsSoldSameSku30d": row.get("unitsSoldSameSku30d", 0),
+                "topOfSearchImpressionShare": row.get("topOfSearchImpressionShare", 0)
+            })
             processed += 1
 
             if processed % 500 == 0:
@@ -155,6 +251,7 @@ try:
         logger.info(f"MySQL insert complete. Total rows processed: {processed}")
 
     store_to_mysql(data)
+    
 
     total_time = round(time.time() - SCRIPT_START, 2)
     logger.info(f"========== KEYWORD CRON SUCCESS (Duration: {total_time}s) ==========")
