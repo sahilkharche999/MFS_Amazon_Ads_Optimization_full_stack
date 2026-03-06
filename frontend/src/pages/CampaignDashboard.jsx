@@ -216,7 +216,7 @@ function CampaignDashboard() {
           Impressions · Clicks · Spend · Orders
         </Typography>
         <ResponsiveContainer width="100%" height={260}>
-          <AreaChart data={normalizedTrendData} margin={{ top: 4, right: 12, bottom: 0, left: 0 }}>
+          <AreaChart data={trendData} margin={{ top: 4, right: 12, bottom: 0, left: 0 }}>
             <defs>
               <linearGradient id="cd_gImp" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="5%" stopColor="#6366f1" stopOpacity={dark ? 0.2 : 0.08} />
@@ -246,20 +246,7 @@ function CampaignDashboard() {
           </AreaChart>
         </ResponsiveContainer>
 
-        {isAllZero && (
-          <Typography
-            variant="body2"
-            sx={{
-              position: "absolute",
-              top: "50%",
-              left: "50%",
-              transform: "translate(-50%, -50%)",
-              color: "text.secondary"
-            }}
-          >
-            No data available for this period
-          </Typography>
-        )}
+
       </Paper>
 
       {/* ── Targets / Keywords Table ── */}
