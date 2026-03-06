@@ -21,7 +21,7 @@ SCRIPT_START = time.time()
 logger.info("========== SP TARGET REPORT CRON START ==========")
 logger.info(f"UTC Time: {datetime.utcnow().isoformat()}")
 
-load_dotenv("../../../.env")
+load_dotenv("../../.env")
 
 # ================= AMAZON AUTH =================
 
@@ -67,7 +67,7 @@ payload = {
     "configuration": {
         "adProduct": "SPONSORED_PRODUCTS",
         "groupBy": ["targeting"],
-        "reportTypeId": "spTargets",
+        "reportTypeId": "spTargeting",
         "timeUnit": "DAILY",
         "format": "GZIP_JSON",
         "columns": [
@@ -81,7 +81,6 @@ payload = {
             "targeting",
             "keywordType",
             "matchType",
-            "keywordBid",
             "impressions",
             "clicks",
             "cost",
@@ -93,7 +92,8 @@ payload = {
             "purchases30d",
             "unitsSoldClicks7d",
             "unitsSoldClicks14d",
-            "unitsSoldClicks30d"
+            "unitsSoldClicks30d",
+            "keywordBid"
         ]
     }
 }
@@ -161,7 +161,39 @@ try:
 
         cursor = conn.cursor()
 
-        query = """YOUR ORIGINAL INSERT QUERY UNCHANGED"""
+        query = """
+            INSERT INTO sp_targeting_reports (
+                campaign_id, campaign_name, campaign_status, ad_group_id, ad_group_name,
+                target_id, targeting, keyword_type, match_type, report_date,
+                impressions, clicks, cost, sales_7d, sales_14d, sales_30d,
+                purchases_7d, purchases_14d, purchases_30d, units_sold_7d,
+                units_sold_14d, units_sold_30d, keyword_bid
+            ) VALUES (
+                %(campaign_id)s, %(campaign_name)s, %(campaign_status)s, %(ad_group_id)s, %(ad_group_name)s,
+                %(target_id)s, %(targeting)s, %(keyword_type)s, %(match_type)s, %(report_date)s,
+                %(impressions)s, %(clicks)s, %(cost)s, %(sales_7d)s, %(sales_14d)s, %(sales_30d)s,
+                %(purchases_7d)s, %(purchases_14d)s, %(purchases_30d)s, %(units_sold_7d)s,
+                %(units_sold_14d)s, %(units_sold_30d)s, %(keyword_bid)s
+            )
+            ON DUPLICATE KEY UPDATE
+                campaign_name=VALUES(campaign_name),
+                campaign_status=VALUES(campaign_status),
+                ad_group_name=VALUES(ad_group_name),
+                targeting=VALUES(targeting),
+                keyword_bid=VALUES(keyword_bid),
+                impressions=VALUES(impressions),
+                clicks=VALUES(clicks),
+                cost=VALUES(cost),
+                sales_7d=VALUES(sales_7d),
+                sales_14d=VALUES(sales_14d),
+                sales_30d=VALUES(sales_30d),
+                purchases_7d=VALUES(purchases_7d),
+                purchases_14d=VALUES(purchases_14d),
+                purchases_30d=VALUES(purchases_30d),
+                units_sold_7d=VALUES(units_sold_7d),
+                units_sold_14d=VALUES(units_sold_14d),
+                units_sold_30d=VALUES(units_sold_30d);
+        """
 
         insert_data = []
 

@@ -165,18 +165,18 @@ def optimize_campaign(campaign_id: str, request: Request):
         acos = (spend / sales) if sales else 0
         roas = (sales / spend) if spend else 0
 
-            entities.append({
-                "entity": row["targeting"],
-                "current_bid": current_bid,
-                "impressions": impressions,
-                "clicks": clicks,
-                "ctr_percent": round(ctr * 100, 2),
-                "spend": spend,
-                "sales": sales,
-                "purchases": purchases,
-                "acos": round(acos, 3) if acos is not None else None,
-                "roas": round(roas, 3) if roas is not None else None
-            })
+        entities.append({
+            "entity": row["targeting"],
+            "current_bid": current_bid,
+            "impressions": impressions,
+            "clicks": clicks,
+            "ctr_percent": round(ctr * 100, 2),
+            "spend": spend,
+            "sales": sales,
+            "purchases": purchases,
+            "acos": round(acos, 3) if acos is not None else None,
+            "roas": round(roas, 3) if roas is not None else None
+        })
 
         logger.info(f"Prepared {len(entities)} entities for AI optimization")
 

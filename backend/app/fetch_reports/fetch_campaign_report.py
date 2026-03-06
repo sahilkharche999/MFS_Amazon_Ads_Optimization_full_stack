@@ -21,7 +21,7 @@ SCRIPT_START = time.time()
 logger.info("========== SP CAMPAIGN REPORT CRON START ==========")
 logger.info(f"UTC Time: {datetime.utcnow().isoformat()}")
 
-load_dotenv("../../../.env")
+load_dotenv("../../.env")
 
 # ================= CONFIG =================
 
@@ -60,7 +60,7 @@ HEADERS = get_headers()
 
 # ================= DATE RANGE =================
 end_date = datetime.utcnow().date() - timedelta(days=1)
-start_date = end_date - timedelta(days=14)
+start_date = end_date - timedelta(days=30)
 
 logger.info(f"Report Date Range: {start_date} → {end_date}")
 
@@ -70,11 +70,37 @@ payload = {
     "endDate": end_date.strftime("%Y-%m-%d"),
     "configuration": {
         "adProduct": "SPONSORED_PRODUCTS",
-        "groupBy": ["Campaign"],
+        "groupBy": ["campaign"],
         "reportTypeId": "spCampaigns",
         "timeUnit": "DAILY",
         "format": "GZIP_JSON",
-        "columns": [ ... ]  # keep your full column list unchanged
+        "columns": [
+            "date",
+            "campaignId",
+            "campaignName",
+            "campaignStatus",
+            "campaignBudgetAmount",
+            "campaignBudgetType",
+            "campaignBudgetCurrencyCode",
+            "impressions",
+            "clicks",
+            "cost",
+            "spend",
+            "purchases1d",
+            "purchases7d",
+            "purchases14d",
+            "purchases30d",
+            "sales1d",
+            "sales7d",
+            "sales14d",
+            "sales30d",
+            "unitsSoldSameSku1d",
+            "unitsSoldSameSku7d",
+            "unitsSoldSameSku14d",
+            "unitsSoldSameSku30d",
+            "costPerClick",
+            "clickThroughRate"
+        ]
     }
 }
 
@@ -138,7 +164,47 @@ try:
         cursor = conn.cursor()
         logger.info("Starting DB insert process")
 
-        query = """YOUR ORIGINAL INSERT QUERY UNCHANGED"""
+        query = """
+            INSERT INTO campaign_performance_daily (
+                date, campaignId, campaignName, campaignStatus, campaignBudgetAmount,
+                campaignBudgetType, campaignBudgetCurrencyCode, impressions, clicks, cost,
+                spend, purchases1d, purchases7d, purchases14d, purchases30d,
+                sales1d, sales7d, sales14d, sales30d, unitsSoldSameSku1d,
+                unitsSoldSameSku7d, unitsSoldSameSku14d, unitsSoldSameSku30d,
+                costPerClick, clickThroughRate
+            ) VALUES (
+                %(date)s, %(campaignId)s, %(campaignName)s, %(campaignStatus)s, %(campaignBudgetAmount)s,
+                %(campaignBudgetType)s, %(campaignBudgetCurrencyCode)s, %(impressions)s, %(clicks)s, %(cost)s,
+                %(spend)s, %(purchases1d)s, %(purchases7d)s, %(purchases14d)s, %(purchases30d)s,
+                %(sales1d)s, %(sales7d)s, %(sales14d)s, %(sales30d)s, %(unitsSoldSameSku1d)s,
+                %(unitsSoldSameSku7d)s, %(unitsSoldSameSku14d)s, %(unitsSoldSameSku30d)s,
+                %(costPerClick)s, %(clickThroughRate)s
+            )
+            ON DUPLICATE KEY UPDATE
+                campaignName=VALUES(campaignName),
+                campaignStatus=VALUES(campaignStatus),
+                campaignBudgetAmount=VALUES(campaignBudgetAmount),
+                campaignBudgetType=VALUES(campaignBudgetType),
+                campaignBudgetCurrencyCode=VALUES(campaignBudgetCurrencyCode),
+                impressions=VALUES(impressions),
+                clicks=VALUES(clicks),
+                cost=VALUES(cost),
+                spend=VALUES(spend),
+                purchases1d=VALUES(purchases1d),
+                purchases7d=VALUES(purchases7d),
+                purchases14d=VALUES(purchases14d),
+                purchases30d=VALUES(purchases30d),
+                sales1d=VALUES(sales1d),
+                sales7d=VALUES(sales7d),
+                sales14d=VALUES(sales14d),
+                sales30d=VALUES(sales30d),
+                unitsSoldSameSku1d=VALUES(unitsSoldSameSku1d),
+                unitsSoldSameSku7d=VALUES(unitsSoldSameSku7d),
+                unitsSoldSameSku14d=VALUES(unitsSoldSameSku14d),
+                unitsSoldSameSku30d=VALUES(unitsSoldSameSku30d),
+                costPerClick=VALUES(costPerClick),
+                clickThroughRate=VALUES(clickThroughRate);
+        """
 
         inserted = 0
 
