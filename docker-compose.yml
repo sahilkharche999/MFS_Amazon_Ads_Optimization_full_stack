@@ -27,11 +27,8 @@ services:
       AMAZON_CLIENT_ID: ${AMAZON_CLIENT_ID}
       AMAZON_CLIENT_SECRET: ${AMAZON_CLIENT_SECRET}
       AMAZON_PROFILE_ID: ${AMAZON_PROFILE_ID}
-    depends_on:
-      - db
     networks:
       - frontend
-      - backend
 
 networks:
   frontend:
