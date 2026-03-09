@@ -5,7 +5,7 @@ import logging
 import traceback
 import time
 
-from backend.app.database.database import get_connection
+from app.database.database import get_connection
 
 router = APIRouter()
 

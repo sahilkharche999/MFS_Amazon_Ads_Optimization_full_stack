@@ -4,7 +4,7 @@ import os, json, time, traceback, logging, re
 import pymysql
 from dotenv import load_dotenv
 
-from backend.app.database.database import get_connection
+from app.database.database import get_connection
 
 load_dotenv()
 

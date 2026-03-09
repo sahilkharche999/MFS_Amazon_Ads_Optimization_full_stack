@@ -5,7 +5,7 @@ import traceback
 import pymysql
 from fastapi import APIRouter, Request
 
-from backend.app.database.database import get_connection
+from app.database.database import get_connection
 
 router = APIRouter()
 
