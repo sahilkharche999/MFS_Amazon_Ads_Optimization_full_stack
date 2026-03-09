@@ -1,13 +1,14 @@
-import requests
-import time
-import io
-import os
 import gzip
+import io
 import json
-import mysql.connector
 import logging
+import os
+import time
 import traceback
 from datetime import datetime, timedelta
+
+import mysql.connector
+import requests
 from dotenv import load_dotenv
 
 # ================= LOGGING SETUP =================
@@ -23,6 +24,7 @@ logger.info(f"UTC Time: {datetime.utcnow().isoformat()}")
 
 load_dotenv("../../../.env")
 
+
 # ================= CONFIG =================
 
 def get_access_token():
@@ -30,11 +32,11 @@ def get_access_token():
     r = requests.post(
         "https://api.amazon.com/auth/o2/token",
         data={
-        "grant_type": "refresh_token",
-        "refresh_token": os.getenv("AMAZON_REFRESH_TOKEN"),
-        "client_id": os.getenv("AMAZON_CLIENT_ID"),
-        "client_secret": os.getenv("AMAZON_CLIENT_SECRET")
-    },
+            "grant_type": "refresh_token",
+            "refresh_token": os.getenv("AMAZON_REFRESH_TOKEN"),
+            "client_id": os.getenv("AMAZON_CLIENT_ID"),
+            "client_secret": os.getenv("AMAZON_CLIENT_SECRET")
+        },
         headers={"Content-Type": "application/x-www-form-urlencoded"}
     )
     r.raise_for_status()
@@ -150,6 +152,7 @@ try:
 
     logger.info(f"Rows downloaded: {len(data)}")
 
+
     # ================= STEP 4: STORE IN MYSQL =================
     def store_to_mysql(rows):
         logger.info("Opening MySQL connection")
@@ -243,6 +246,7 @@ try:
         conn.close()
 
         logger.info(f"DB insert completed. Rows processed: {inserted}")
+
 
     store_to_mysql(data)
 

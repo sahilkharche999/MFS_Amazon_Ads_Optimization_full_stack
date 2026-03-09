@@ -1,13 +1,14 @@
-import requests
-import time
-import io
-import os
 import gzip
+import io
 import json
-import mysql.connector
 import logging
+import os
+import time
 import traceback
 from datetime import datetime, timedelta
+
+import mysql.connector
+import requests
 from dotenv import load_dotenv
 
 # ================= LOGGING SETUP =================
@@ -23,6 +24,7 @@ logger.info(f"UTC Time: {datetime.utcnow().isoformat()}")
 
 load_dotenv("../../../.env")
 
+
 # ================= CONFIG =================
 
 def get_access_token():
@@ -34,7 +36,8 @@ def get_access_token():
             "refresh_token": os.getenv("AMAZON_REFRESH_TOKEN"),
             "client_id": os.getenv("AMAZON_CLIENT_ID"),
             "client_secret": os.getenv("AMAZON_CLIENT_SECRET")
-        }
+        },
+        headers={"Content-Type": "application/x-www-form-urlencoded"}
     )
     r.raise_for_status()
     logger.info("Access token retrieved successfully")
@@ -74,13 +77,14 @@ payload = {
         "timeUnit": "DAILY",
         "format": "GZIP_JSON",
         "columns": [
-            "date", "keywordId", "keyword", "matchType", "campaignId", "campaignName", 
-            "adGroupId", "adGroupName", "impressions", "clicks", "cost", "campaignBudgetAmount", 
+            "date", "keywordId", "keyword", "matchType", "campaignId", "campaignName",
+            "adGroupId", "adGroupName", "impressions", "clicks", "cost", "campaignBudgetAmount",
             "campaignBudgetCurrencyCode", "campaignStatus", "keywordBid", "adKeywordStatus",
-            "purchases1d", "purchases7d", "purchases14d", "purchases30d", 
-            "sales1d", "sales7d", "sales14d", "sales30d", 
+            "purchases1d", "purchases7d", "purchases14d", "purchases30d",
+            "sales1d", "sales7d", "sales14d", "sales30d",
             "unitsSoldClicks1d", "unitsSoldClicks7d", "unitsSoldClicks14d", "unitsSoldClicks30d",
-            "attributedSalesSameSku1d", "attributedSalesSameSku7d", "attributedSalesSameSku14d", "attributedSalesSameSku30d",
+            "attributedSalesSameSku1d", "attributedSalesSameSku7d", "attributedSalesSameSku14d",
+            "attributedSalesSameSku30d",
             "unitsSoldSameSku1d", "unitsSoldSameSku7d", "unitsSoldSameSku14d", "unitsSoldSameSku30d",
             "topOfSearchImpressionShare"
         ]
@@ -132,6 +136,7 @@ try:
         data = json.load(gz)
 
     logger.info(f"Rows downloaded: {len(data)}")
+
 
     # ================= STEP 4: STORE IN MYSQL =================
     def store_to_mysql(rows):
@@ -203,7 +208,7 @@ try:
             cursor.execute(query, {
                 "date": row.get("date"),
                 "keywordId": row.get("keywordId"),
-                "keywordText": row.get("keyword"), # CORRECTED NAME
+                "keywordText": row.get("keyword"),  # CORRECTED NAME
                 "matchType": row.get("matchType"),
                 "campaignId": row.get("campaignId"),
                 "campaignName": row.get("campaignName"),
@@ -212,7 +217,7 @@ try:
                 "impressions": row.get("impressions", 0),
                 "clicks": row.get("clicks", 0),
                 "cost": row.get("cost", 0),
-                "campaignBudget": row.get("campaignBudgetAmount", 0), # CORRECTED NAME
+                "campaignBudget": row.get("campaignBudgetAmount", 0),  # CORRECTED NAME
                 "campaignBudgetCurrencyCode": row.get("campaignBudgetCurrencyCode"),
                 "campaignStatus": row.get("campaignStatus"),
                 "keywordBid": row.get("keywordBid", 0),
@@ -250,8 +255,8 @@ try:
 
         logger.info(f"MySQL insert complete. Total rows processed: {processed}")
 
+
     store_to_mysql(data)
-    
 
     total_time = round(time.time() - SCRIPT_START, 2)
     logger.info(f"========== KEYWORD CRON SUCCESS (Duration: {total_time}s) ==========")
@@ -260,4 +265,4 @@ except Exception as e:
     logger.error("KEYWORD CRON FAILED")
     logger.error(str(e))
     logger.error(traceback.format_exc())
-    raise 
+    raise
