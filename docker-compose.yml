@@ -17,8 +17,8 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DB_HOST: mfs-db
-      DB_PORT: 3306
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT}
       DB_USER: ${DB_USER}
       DB_PASSWORD: ${DB_PASSWORD}
       DB_DATABASE: ${DB_DATABASE}
@@ -33,27 +33,6 @@ services:
       - frontend
       - backend
 
-  db:
-    image: mysql:8.0
-    container_name: mfs-db
-    environment:
-      MYSQL_ROOT_PASSWORD: ${ROOT_PASSWORD}
-      MYSQL_DATABASE: ${DB_DATABASE}
-      MYSQL_USER: ${DB_USER}
-      MYSQL_PASSWORD: ${DB_PASSWORD}
-    volumes:
-      - ./db-container:/var/lib/mysql
-    ports:
-      - "3306:3306"
-    networks:
-      - backend
-
 networks:
   frontend:
     driver: bridge
-  backend:
-    driver: bridge
-
-volumes:
-  mfs_mysql_data:
-    driver: local
