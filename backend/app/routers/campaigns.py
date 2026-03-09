@@ -1,9 +1,11 @@
-from fastapi import APIRouter, Request
-import pymysql
-from app.database import get_connection
 import logging
-import traceback
 import time
+import traceback
+
+import pymysql
+from fastapi import APIRouter, Request
+
+from backend.app.database.database import get_connection
 
 router = APIRouter()
 
@@ -18,7 +20,6 @@ logger = logging.getLogger("campaigns")
 
 @router.get("/campaigns")
 def get_campaigns(request: Request):
-
     start_time = time.time()
 
     logger.info("========== GET CAMPAIGNS ENDPOINT HIT ==========")

@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Request
-from app.database import get_connection
 import pymysql
 import logging
 import traceback
 import time
+
+from backend.app.database.database import get_connection
 
 router = APIRouter()
 

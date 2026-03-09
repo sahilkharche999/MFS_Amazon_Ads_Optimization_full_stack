@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Request
-from app.database import get_connection
 from openai import OpenAI
 import os, json, time, traceback, logging, re
 import pymysql
 from dotenv import load_dotenv
+
+from backend.app.database.database import get_connection
 
 load_dotenv()
 
