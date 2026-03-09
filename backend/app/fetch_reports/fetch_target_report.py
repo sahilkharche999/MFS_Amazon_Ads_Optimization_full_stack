@@ -21,7 +21,7 @@ SCRIPT_START = time.time()
 logger.info("========== SP TARGET REPORT CRON START ==========")
 logger.info(f"UTC Time: {datetime.utcnow().isoformat()}")
 
-load_dotenv("../../.env")
+load_dotenv("../../../.env")
 
 # ================= AMAZON AUTH =================
 
@@ -100,6 +100,7 @@ payload = {
 
 GENERATE_URL = "https://advertising-api.amazon.com/reporting/reports"
 STATUS_URL_TEMPLATE = "https://advertising-api.amazon.com/reporting/reports/{}"
+POLL_INTERVAL = 45
 HEADERS = get_headers()
 
 try:
@@ -134,7 +135,7 @@ try:
             logger.error("Target report generation failed")
             raise Exception("Amazon target report generation failed")
 
-        time.sleep(10)
+        time.sleep(POLL_INTERVAL)
 
     # ================= STEP 3: DOWNLOAD =================
     logger.info("Downloading target report")
@@ -180,6 +181,8 @@ try:
                 campaign_status=VALUES(campaign_status),
                 ad_group_name=VALUES(ad_group_name),
                 targeting=VALUES(targeting),
+                keyword_type=VALUES(keyword_type),
+                match_type=VALUES(match_type),
                 keyword_bid=VALUES(keyword_bid),
                 impressions=VALUES(impressions),
                 clicks=VALUES(clicks),

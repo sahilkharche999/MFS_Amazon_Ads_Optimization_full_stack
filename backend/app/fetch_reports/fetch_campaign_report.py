@@ -21,7 +21,7 @@ SCRIPT_START = time.time()
 logger.info("========== SP CAMPAIGN REPORT CRON START ==========")
 logger.info(f"UTC Time: {datetime.utcnow().isoformat()}")
 
-load_dotenv("../../.env")
+load_dotenv("../../../.env")
 
 # ================= CONFIG =================
 
@@ -54,7 +54,7 @@ def get_headers():
 
 GENERATE_URL = "https://advertising-api.amazon.com/reporting/reports"
 STATUS_URL_TEMPLATE = "https://advertising-api.amazon.com/reporting/reports/{report_id}"
-POLL_INTERVAL = 10
+POLL_INTERVAL = 45
 
 HEADERS = get_headers()
 

@@ -21,7 +21,7 @@ SCRIPT_START = time.time()
 logger.info("========== SP KEYWORD REPORT CRON START ==========")
 logger.info(f"UTC Time: {datetime.utcnow().isoformat()}")
 
-load_dotenv("../../.env")
+load_dotenv("../../../.env")
 
 # ================= CONFIG =================
 
@@ -53,7 +53,7 @@ def get_headers():
 
 GENERATE_URL = "https://advertising-api.amazon.com/reporting/reports"
 STATUS_URL_TEMPLATE = "https://advertising-api.amazon.com/reporting/reports/{report_id}"
-POLL_INTERVAL = 10
+POLL_INTERVAL = 45
 
 HEADERS = get_headers()
 
@@ -149,7 +149,7 @@ try:
 
         query = """
             INSERT INTO keyword_performance_full (
-                date, keywordId, keywordText, match_type, campaignId, campaignName, 
+                date, keywordId, keywordText, matchType, campaignId, campaignName, 
                 adGroupId, adGroupName, impressions, clicks, cost, campaignBudget, 
                 campaignBudgetCurrencyCode, campaignStatus, keywordBid, adKeywordStatus,
                 purchases1d, purchases7d, purchases14d, purchases30d, 
@@ -159,7 +159,7 @@ try:
                 unitsSoldSameSku1d, unitsSoldSameSku7d, unitsSoldSameSku14d, unitsSoldSameSku30d,
                 topOfSearchImpressionShare
             ) VALUES (
-                %(date)s, %(keywordId)s, %(keywordText)s, %(match_type)s, %(campaignId)s, %(campaignName)s, 
+                %(date)s, %(keywordId)s, %(keywordText)s, %(matchType)s, %(campaignId)s, %(campaignName)s, 
                 %(adGroupId)s, %(adGroupName)s, %(impressions)s, %(clicks)s, %(cost)s, %(campaignBudget)s, 
                 %(campaignBudgetCurrencyCode)s, %(campaignStatus)s, %(keywordBid)s, %(adKeywordStatus)s,
                 %(purchases1d)s, %(purchases7d)s, %(purchases14d)s, %(purchases30d)s, 
@@ -171,7 +171,7 @@ try:
             )
             ON DUPLICATE KEY UPDATE
                 keywordText=VALUES(keywordText),
-                match_type=VALUES(match_type),
+                matchType=VALUES(matchType),
                 campaignName=VALUES(campaignName),
                 adGroupName=VALUES(adGroupName),
                 impressions=VALUES(impressions),
@@ -204,7 +204,7 @@ try:
                 "date": row.get("date"),
                 "keywordId": row.get("keywordId"),
                 "keywordText": row.get("keyword"), # CORRECTED NAME
-                "match_type": row.get("matchType"),
+                "matchType": row.get("matchType"),
                 "campaignId": row.get("campaignId"),
                 "campaignName": row.get("campaignName"),
                 "adGroupId": row.get("adGroupId"),
@@ -260,4 +260,4 @@ except Exception as e:
     logger.error("KEYWORD CRON FAILED")
     logger.error(str(e))
     logger.error(traceback.format_exc())
-    raise
+    raise 
