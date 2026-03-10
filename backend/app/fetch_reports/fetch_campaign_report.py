@@ -22,6 +22,10 @@ SCRIPT_START = time.time()
 logger.info("========== SP CAMPAIGN REPORT CRON START ==========")
 logger.info(f"UTC Time: {datetime.utcnow().isoformat()}")
 
+# Use os.chdir to ensure relative paths work regardless of where the script is called
+abspath = os.path.abspath(__file__)
+dname = os.path.dirname(abspath)
+os.chdir(dname)
 load_dotenv("../../../.env")
 
 
@@ -39,6 +43,9 @@ def get_access_token():
         },
         headers={"Content-Type": "application/x-www-form-urlencoded"}
     )
+    if r.status_code != 200:
+        logger.error(f"AMAZON AUTH ERROR | Status: {r.status_code}")
+        logger.error(f"Response Body: {r.text}")
     r.raise_for_status()
     logger.info("Access token retrieved successfully")
     return r.json()["access_token"]
