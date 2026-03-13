@@ -11,18 +11,26 @@ import {
   DialogContent,
   DialogActions,
   CircularProgress,
+  InputBase,
 } from "@mui/material";
-import { DataGrid } from "@mui/x-data-grid";
+import { DataGrid, useGridApiContext } from "@mui/x-data-grid";
 import { useTheme } from "@mui/material/styles";
 import api from "../services/api";
-import { getGridStyles } from "../constants/gridStyles";
+import { getGridStyles, getMenuStyles } from "../constants/gridStyles";
+import FilterAltIcon from "@mui/icons-material/FilterAlt";
+import SearchIcon from "@mui/icons-material/Search";
+import { IconButton } from "@mui/material";
 
-function Campaigns() {
+function Campaigns({ startDate, endDate }) {
   const [campaigns, setCampaigns] = useState([]);
   const [openOptimize, setOpenOptimize] = useState(false);
   const [optimizationRows, setOptimizationRows] = useState([]);
+  const [optimizationMessage, setOptimizationMessage] = useState("");
+  const [optimizationError, setOptimizationError] = useState(null);
   const [loadingOptimize, setLoadingOptimize] = useState(false);
   const [selectedCampaignName, setSelectedCampaignName] = useState("");
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   const navigate = useNavigate();
   const theme = useTheme();
   const dark = theme.palette.mode === "dark";
@@ -32,6 +40,11 @@ function Campaigns() {
       .then(res => setCampaigns(res.data))
       .catch(err => console.error(err));
   }, []);
+
+  // ── Client-side filtering ──────────────────────────────────────────────────
+  const filteredCampaigns = campaigns.filter(c =>
+    c.name?.toLowerCase().includes(searchQuery.toLowerCase())
+  );
 
   // ── Shared DataGrid sx ──────────────────────────────────────────────────
   const gridSx = getGridStyles(dark);
@@ -145,11 +158,25 @@ function Campaigns() {
               setSelectedCampaignName(p.row.name);
               setOpenOptimize(true);
               setLoadingOptimize(true);
+              setOptimizationRows([]);
+              setOptimizationMessage("");
+              setOptimizationError(null);
               try {
-                const res = await api.post(`/campaign/${p.row.campaignId}/optimize`);
+                const res = await api.post(`/campaign/${p.row.campaignId}/optimize`, null, {
+                  params: { start_date: startDate, end_date: endDate }
+                });
+                console.log("Optimization API Response Data:", res.data);
+                console.log("Optimization API Success:", {
+                  status: res.status,
+                  rowsReturned: res.data.optimization?.length || 0,
+                  message: res.data.message
+                });
                 setOptimizationRows(res.data.optimization || []);
+                setOptimizationMessage(res.data.message || "");
               } catch (err) {
-                console.error(err);
+                console.error("Optimization API Error:", err);
+                const backendError = err.response?.data?.message || "Failed to analyze campaign. The server encountered an error.";
+                setOptimizationError(backendError);
               } finally {
                 setLoadingOptimize(false);
               }
@@ -157,10 +184,28 @@ function Campaigns() {
           >
             {loadingOptimize ? "Optimizing…" : "Optimize"}
           </Button>
-        </Box>
+        </Box >
       ),
     },
   ];
+
+  // Custom funnel icon component that triggers the filter panel directly
+  const FilterIconComponent = (props) => {
+    const apiRef = useGridApiContext();
+    return (
+      <IconButton
+        size="small"
+        className="custom-filter-icon"
+        onClick={(e) => {
+          e.stopPropagation();
+          // Open the filter panel specifically for this field
+          apiRef.current.showFilterPanel(props.field);
+        }}
+      >
+        <FilterAltIcon />
+      </IconButton>
+    );
+  };
 
   // ── Optimize result columns ───────────────────────────────────────────────
   const optimizeColumns = [
@@ -211,12 +256,56 @@ function Campaigns() {
 
   return (
     <Box sx={{ width: "100%" }}>
-      <Typography
-        variant="h5"
-        sx={{ fontWeight: 700, letterSpacing: "-0.3px", mb: 2 }}
-      >
-        Campaigns
-      </Typography>
+      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 2 }}>
+        <Typography
+          variant="h5"
+          sx={{ fontWeight: 700, letterSpacing: "-0.3px" }}
+        >
+          Campaigns
+        </Typography>
+
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            position: "relative",
+            background: isSearchOpen ? (dark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.03)") : "transparent",
+            borderRadius: "12px",
+            transition: "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
+            border: isSearchOpen ? (dark ? "1px solid rgba(255,255,255,0.1)" : "1px solid rgba(0,0,0,0.1)") : "1px solid transparent",
+            width: isSearchOpen ? 240 : 40,
+            height: 40,
+          }}
+        >
+          <IconButton
+            onClick={() => setIsSearchOpen(!isSearchOpen)}
+            size="small"
+            sx={{
+              position: "absolute",
+              right: 4,
+              color: isSearchOpen ? (dark ? "#6366f1" : "#4F46E5") : "text.secondary",
+              transition: "color 0.3s ease"
+            }}
+          >
+            <SearchIcon sx={{ fontSize: 22 }} />
+          </IconButton>
+
+          <InputBase
+            placeholder="Search campaigns..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            sx={{
+              ml: 1.5,
+              flex: 1,
+              fontSize: 14,
+              opacity: isSearchOpen ? 1 : 0,
+              width: isSearchOpen ? "calc(100% - 48px)" : 0,
+              transition: "opacity 0.2s ease, width 0.3s ease",
+              pointerEvents: isSearchOpen ? "auto" : "none",
+            }}
+          />
+        </Box>
+      </Box>
 
       <Paper
         elevation={0}
@@ -231,12 +320,21 @@ function Campaigns() {
         }}
       >
         <DataGrid
-          rows={campaigns}
+          rows={filteredCampaigns}
           columns={columns}
           getRowId={(row) => row.campaignId}
           pageSizeOptions={[10]}
           initialState={{ pagination: { paginationModel: { pageSize: 10, page: 0 } } }}
           sx={gridSx}
+          components={{
+            ColumnHeaderFilterIconButton: FilterIconComponent,
+            ColumnMenuFilterItem: () => null,
+          }}
+          componentsProps={{
+            columnMenu: {
+              sx: getMenuStyles(dark)
+            }
+          }}
         />
       </Paper>
 
@@ -270,6 +368,15 @@ function Campaigns() {
                 <Typography variant="body1" sx={{ fontWeight: 500 }}>AI is analysing campaign performance…</Typography>
                 <Typography variant="caption" color="text.secondary">This may take a few seconds</Typography>
               </Box>
+            ) : optimizationError ? (
+              <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: 300, gap: 1 }}>
+                <Typography variant="h6" sx={{ fontWeight: 600, color: "#ef4444" }}>
+                  {optimizationError}
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  Please check your connection and try again.
+                </Typography>
+              </Box>
             ) : (
               <Box sx={{ minWidth: 1200 }}>
                 <DataGrid
@@ -278,6 +385,9 @@ function Campaigns() {
                   rows={optimizationRows.map((row, i) => ({ id: i, ...row, confidence: row.confidence_score }))}
                   columns={optimizeColumns}
                   disableRowSelectionOnClick
+                  localeText={{
+                    noRowsLabel: optimizationMessage || "No performance data found for this campaign within the selected date range."
+                  }}
                   sx={{
                     ...gridSx,
                     "& .MuiDataGrid-cell": {
@@ -291,6 +401,11 @@ function Campaigns() {
                       minHeight: "auto !important",
                       maxHeight: "none !important",
                     },
+                  }}
+                  componentsProps={{
+                    columnMenu: {
+                      sx: getMenuStyles(dark)
+                    }
                   }}
                 />
               </Box>

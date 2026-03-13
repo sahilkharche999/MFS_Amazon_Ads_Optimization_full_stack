@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
 from openai import OpenAI
 import os, json, time, traceback, logging, re
 import pymysql
@@ -21,6 +22,7 @@ client = OpenAI(
     api_key=os.getenv("OPENROUTER_API_KEY"),
     base_url="https://openrouter.ai/api/v1"
 )
+
 
 SYSTEM_PROMPT = """
 You are a senior Amazon Sponsored Products optimization strategist specializing in book publishing.
@@ -106,13 +108,14 @@ No text before or after the JSON.
 """
 
 @router.post("/campaign/{campaign_id}/optimize")
-def optimize_campaign(campaign_id: str, request: Request):
+def optimize_campaign(campaign_id: str, request: Request, start_date: str = None, end_date: str = None):
 
     start_time = time.time()
 
     logger.info("========== OPTIMIZE ENDPOINT HIT ==========")
     logger.info(f"Request URL: {request.url}")
     logger.info(f"Campaign ID: {campaign_id}")
+    logger.info(f"Params: start_date={start_date}, end_date={end_date}")
 
     try:
         # ================= DATABASE =================
@@ -120,25 +123,42 @@ def optimize_campaign(campaign_id: str, request: Request):
         conn = get_connection()
         cursor = conn.cursor(pymysql.cursors.DictCursor)
 
-        logger.info("Executing 14-day aggregation query")
-
-        query = """
-            SELECT
-                target_id,
-                targeting,
-                MAX(keyword_bid) AS current_bid,
-                SUM(impressions) AS impressions,
-                SUM(clicks) AS clicks,
-                SUM(cost) AS spend,
-                SUM(sales_7d) AS sales,
-                SUM(purchases_7d) AS purchases
-        FROM sp_targeting_reports
-        WHERE campaign_id = %s
-          AND report_date >= CURDATE() - INTERVAL 14 DAY
-        GROUP BY target_id, targeting
-        """
-
-        cursor.execute(query, (campaign_id,))
+        if start_date and end_date:
+            logger.info(f"Executing custom range aggregation query: {start_date} to {end_date}")
+            query = """
+                SELECT
+                    target_id,
+                    targeting,
+                    MAX(keyword_bid) AS current_bid,
+                    SUM(impressions) AS impressions,
+                    SUM(clicks) AS clicks,
+                    SUM(cost) AS spend,
+                    SUM(sales_7d) AS sales,
+                    SUM(purchases_7d) AS purchases
+            FROM sp_targeting_reports
+            WHERE campaign_id = %s
+              AND report_date BETWEEN %s AND %s
+            GROUP BY target_id, targeting
+            """
+            cursor.execute(query, (campaign_id, start_date, end_date))
+        else:
+            logger.info("Executing default 14-day aggregation query")
+            query = """
+                SELECT
+                    target_id,
+                    targeting,
+                    MAX(keyword_bid) AS current_bid,
+                    SUM(impressions) AS impressions,
+                    SUM(clicks) AS clicks,
+                    SUM(cost) AS spend,
+                    SUM(sales_7d) AS sales,
+                    SUM(purchases_7d) AS purchases
+            FROM sp_targeting_reports
+            WHERE campaign_id = %s
+              AND report_date >= CURDATE() - INTERVAL 14 DAY
+            GROUP BY target_id, targeting
+            """
+            cursor.execute(query, (campaign_id,))
         rows = cursor.fetchall()
 
         logger.info(f"Fetched {len(rows)} targeting rows from DB")
@@ -149,7 +169,13 @@ def optimize_campaign(campaign_id: str, request: Request):
 
         if not rows:
             logger.warning("No performance data found for this campaign")
-            return {"optimization": []}
+            resp = {
+                "success": True,
+                "message": "No performance data found for this campaign within the selected date range.",
+                "optimization": []
+            }
+            logger.info(f"Returning 'no data' payload: {resp}")
+            return resp
 
         # ================= PREPARE ENTITIES =================
         entities = []
@@ -162,22 +188,23 @@ def optimize_campaign(campaign_id: str, request: Request):
             purchases = int(row["purchases"] or 0)
             current_bid = float(row["current_bid"] or 0)
 
-        ctr = (clicks / impressions) if impressions else 0
-        acos = (spend / sales) if sales else 0
-        roas = (sales / spend) if spend else 0
+            ctr = (clicks / impressions) if impressions else 0
+            acos = (spend / sales) if sales else 0
+            roas = (sales / spend) if spend else 0
 
-        entities.append({
-            "entity": row["targeting"],
-            "current_bid": current_bid,
-            "impressions": impressions,
-            "clicks": clicks,
-            "ctr_percent": round(ctr * 100, 2),
-            "spend": spend,
-            "sales": sales,
-            "purchases": purchases,
-            "acos": round(acos, 3) if acos is not None else None,
-            "roas": round(roas, 3) if roas is not None else None
-        })
+            entities.append({
+                "entity": row["targeting"],
+                "current_bid": current_bid,
+                "impressions": impressions,
+                "clicks": clicks,
+                "ctr_percent": round(ctr * 100, 2),
+                "spend": spend,
+                "sales": sales,
+                "purchases": purchases,
+                "acos": round(acos, 3) if acos is not None else None,
+                "roas": round(roas, 3) if roas is not None else None
+            })
+
 
         logger.info(f"Prepared {len(entities)} entities for AI optimization")
 
@@ -186,7 +213,9 @@ def optimize_campaign(campaign_id: str, request: Request):
 
         ai_start = time.time()
 
+        client = get_openai_client()
         response = client.chat.completions.create(
+
             model="openai/gpt-5",
             temperature=0.2,
             messages=[
@@ -281,13 +310,24 @@ def optimize_campaign(campaign_id: str, request: Request):
         logger.info(f"Optimize endpoint completed in {total_time} seconds")
         logger.info("========== OPTIMIZE END ==========")
 
-        return {
+        resp = {
+            "success": True,
+            "message": f"Successfully analyzed {len(entities)} targets for optimization.",
             "campaign_id": campaign_id,
             "optimization": merged_results
         }
+        logger.info(f"Returning final success payload: {resp}")
+        return resp
 
     except Exception as e:
         logger.error("CRITICAL ERROR in optimize endpoint")
         logger.error(str(e))
         logger.error(traceback.format_exc())
-        raise
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "message": f"Server Error: {str(e)}",
+                "error": str(e)
+            }
+        )
