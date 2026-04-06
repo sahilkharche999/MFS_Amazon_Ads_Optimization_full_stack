@@ -8,8 +8,8 @@ export const ColorModeContext = createContext();
 import { getTheme } from "./theme";
 import Home from "./pages/Home";
 import Campaigns from "./pages/Campaigns";
-
 import CampaignDashboard from "./pages/CampaignDashboard";
+import SocialMediaGenerator from "./pages/SocialMediaGenerator";
 
 function App() {
 
@@ -39,6 +39,9 @@ function App() {
               path="/campaign/:campaignId"
               element={<CampaignDashboard />}
             />
+
+            {/* Social Media Generator */}
+            <Route path="/social-media-generator" element={<SocialMediaGenerator />} />
 
             {/* Catch-all: anything else redirects to / */}
             <Route path="*" element={<Navigate to="/" replace />} />

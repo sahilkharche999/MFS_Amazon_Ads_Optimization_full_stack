@@ -1,6 +1,23 @@
 from fastapi import FastAPI, Request
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
+import os
+
+# Load environment variables from .env file (check current and parent dir)
+target_env = None
+if os.path.exists(".env"):
+    target_env = ".env"
+elif os.path.exists("../.env"):
+    target_env = "../.env"
+
+if target_env:
+    load_dotenv(target_env)
+else:
+    load_dotenv()
+
 from app.routers import campaigns, campaign_dashboard, dashboard, optimize_campaign
+from app.social_media import router as social_media_router
 import logging
 import time
 import traceback
@@ -24,7 +41,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-logger.info("CORS middleware configured")
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
+
+logger.info("CORS middleware and static files configured")
 
 # ================= GLOBAL REQUEST LOGGER =================
 @app.middleware("http")
@@ -43,6 +62,12 @@ async def log_requests(request: Request, call_next):
             f"Status: {response.status_code} "
             f"Time: {process_time}s"
         )
+
+        # ── ENSURE CORS FOR STATIC FILES (Canvas/Fetch Safety) ──
+        if request.url.path.startswith("/static"):
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            response.headers["Access-Control-Allow-Methods"] = "*"
+            response.headers["Access-Control-Allow-Headers"] = "*"
 
         return response
 
@@ -69,5 +94,6 @@ app.include_router(campaigns.router, prefix="/api")
 app.include_router(campaign_dashboard.router, prefix="/api")
 app.include_router(optimize_campaign.router, prefix="/api")
 app.include_router(dashboard.router, prefix="/api")
+app.include_router(social_media_router.router, prefix="/api")
 
 logger.info("All routers registered successfully")

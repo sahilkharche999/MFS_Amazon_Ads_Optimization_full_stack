@@ -15,7 +15,9 @@ import { useTheme } from "@mui/material/styles";
 import LightModeIcon from "@mui/icons-material/LightMode";
 import DarkModeIcon from "@mui/icons-material/DarkMode";
 import CalendarTodayIcon from "@mui/icons-material/CalendarToday";
+import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
 import { useContext } from "react";
+import { useNavigate } from "react-router-dom";
 import { ColorModeContext } from "../App";
 import {
   XAxis,
@@ -63,6 +65,7 @@ function Home() {
 
   const theme = useTheme();
   const { toggleColorMode } = useContext(ColorModeContext);
+  const navigate = useNavigate();
   const dark = theme.palette.mode === "dark";
 
   // Calculate day difference for title
@@ -170,6 +173,26 @@ function Home() {
         </Box>
 
         <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
+          <Button
+            variant="contained"
+            startIcon={<AutoAwesomeIcon sx={{ fontSize: 16 }} />}
+            onClick={() => navigate("/social-media-generator")}
+            sx={{
+              background: "linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)",
+              textTransform: "none",
+              fontWeight: 700,
+              height: 36,
+              borderRadius: "10px",
+              fontSize: "13px",
+              boxShadow: "0 4px 14px rgba(99,102,241,0.35)",
+              "&:hover": {
+                background: "linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%)",
+                boxShadow: "0 6px 18px rgba(99,102,241,0.45)",
+              },
+            }}
+          >
+            Social Media Generator
+          </Button>
           <IconButton
             onClick={toggleColorMode}
             size="small"
