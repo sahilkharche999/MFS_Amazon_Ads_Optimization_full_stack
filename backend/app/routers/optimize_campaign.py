@@ -2,8 +2,10 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from openai import OpenAI
 import os, json, time, traceback, logging, re
+import asyncio
 import pymysql
 from dotenv import load_dotenv
+from concurrent.futures import ThreadPoolExecutor  # ← ADDED
 
 from app.database.database import get_connection
 
@@ -23,89 +25,149 @@ client = OpenAI(
     base_url="https://openrouter.ai/api/v1"
 )
 
-
 SYSTEM_PROMPT = """
-You are a senior Amazon Sponsored Products optimization strategist specializing in book publishing.
+You are an Amazon Sponsored Products optimization strategist for book publishing.
 
-MISSION:
-Your purpose is to analyze target-level Amazon Ads advertising performance for book marketing and produce strategic optimization recommendations using ACoS as the leading indicator metric and return one optimization decision per target.
+GOAL: Maximize profitable scale, minimize wasted spend. One decision per target. Output valid JSON only.
 
-OBJECTIVE:
-Maximize profitable scale while minimizing wasted spend.
+METRICS (calculate from input only, null if division by zero):
+- ACoS = Spend / Sales
+- ROAS = Sales / Spend
+- CTR = Clicks / Impressions
 
-PRIMARY METRICS (calculate exactly from provided data):
-ACoS = Spend ÷ Sales (if Sales > 0)
-ROAS = Sales ÷ Spend (if Spend > 0)
-CTR = Clicks ÷ Impressions (if Impressions > 0)
+DECISION LOGIC:
+| Condition                        | Decision                |
+|----------------------------------|-------------------------|
+| impressions = 0                  | increase_bid            |
+| spend > 0 and sales = 0         | pause / negative_target |
+| roas > 3                         | scale / increase_bid    |
+| roas 2–3                         | hold                    |
+| roas < 2 and sales > 0          | decrease_bid            |
 
-DECISIONS (choose one):
-increase_bid | decrease_bid | hold | pause | negative_target | scale
+TARGET ROAS (always numeric, never null):
+- increase / scale  → 2.5–3.5
+- hold              → near current ROAS
+- decrease          → 3.0–4.0
+- pause / negative  → 4.0+
 
-CORE LOGIC (guideline, not rigid):
-sales = 0 and spend > 0 → pause or negative_target
-impressions = 0 → increase_bid (visibility issue)
-roas > 3 → scale or increase_bid
-roas 2-3 → hold
-roas < 2 and sales > 0 → decrease_bid
+RULES:
+- Use ONLY provided input values. Never invent or estimate.
+- suggested_bid: use current_bid if no change is justified.
+- confidence_score: integer 0–100.
+- No text outside JSON. No markdown. No trailing commas.
 
-TARGET ROAS:
-Must ALWAYS be numeric
-Never null
-Strategic (not computed)
-increase/scale → 2.5-3.5 typical
-hold → near current ROAS
-decrease → 3-4+
-pause/negative → 4+
-
-Analyze performance holistically. Consider:
-- Visibility
-- Conversion efficiency
-- Profitability
-- Scale potential
-- Waste risk
-
-Provide reasoning that references:
-- Spend, Sales, ROAS, ACoS, CTR, Impression volume
-Explain WHY the decision improves profitability or scale.
-
-STRICT RULES:
-Use ONLY the numbers provided in the input.
-NEVER invent or estimate missing values.
-If a metric cannot be calculated (division by zero), return null.
-suggested_bid must be a numeric value (use current_bid if no change is justified).
-target_roas must be numeric or null.
-confidence_score must be an integer between 0 and 100.
-Do NOT include commentary outside the JSON.
-Do NOT include markdown formatting.
-Output must be valid JSON.
-Output must be a JSON array.
-No trailing commas.
-No additional fields beyond the defined schema.
-
-OUTPUT SCHEMA (must match exactly):
+OUTPUT SCHEMA:
 [
-{
-"entity": "string",
-"decision": "increase_bid | decrease_bid | hold | pause | negative_target",
-"suggested_bid": number,
-"target_roas": number | null,
-"analysis": {
-"acos": number | null,
-"roas": number | null,
-"ctr_percent": number | null,
-"profitability_assessment": "string",
-"efficiency_assessment": "string"
-},
-"reasoning": "string",
-"confidence_score": integer
-}
+  {
+    "entity": "string",
+    "decision": "increase_bid | decrease_bid | hold | pause | negative_target | scale",
+    "suggested_bid": number,
+    "target_roas": number,
+    "analysis": {
+      "acos": number | null,
+      "roas": number | null,
+      "ctr_percent": number | null,
+      "profitability_assessment": "string",
+      "efficiency_assessment": "string"
+    },
+    "reasoning": "string",
+    "confidence_score": integer
+  }
 ]
-
-Return ONLY the JSON array.
-No markdown.
-No explanations.
-No text before or after the JSON.
 """
+
+# ============================================================
+# ← ADDED: Pre-filter function — handles 100% deterministic
+#   targets instantly in Python, never sends them to GPT-5
+# ============================================================
+def pre_filter(entity: dict):
+    impressions = entity["impressions"]
+    spend = entity["spend"]
+    sales = entity["sales"]
+    current_bid = entity["current_bid"]
+    roas = entity["roas"] or 0
+
+    # Zero impressions → increase_bid (visibility issue, no AI needed)
+    if impressions == 0:
+        return {
+            "entity": entity["entity"],
+            "decision": "increase_bid",
+            "suggested_bid": round(current_bid * 1.2, 2),
+            "target_roas": 2.5,
+            "analysis": {
+                "acos": entity["acos"],
+                "roas": entity["roas"],
+                "ctr_percent": entity["ctr_percent"],
+                "profitability_assessment": "No impressions — visibility issue",
+                "efficiency_assessment": "No data to assess"
+            },
+            "reasoning": "Zero impressions. Increase bid to gain visibility.",
+            "confidence_score": 99
+        }
+
+    # Spend > 0, Sales = 0 → pause (wasted spend, no AI needed)
+    if spend > 0 and sales == 0:
+        return {
+            "entity": entity["entity"],
+            "decision": "pause",
+            "suggested_bid": current_bid,
+            "target_roas": 4.0,
+            "analysis": {
+                "acos": entity["acos"],
+                "roas": entity["roas"],
+                "ctr_percent": entity["ctr_percent"],
+                "profitability_assessment": "Spend with zero sales — pure waste",
+                "efficiency_assessment": "No conversions detected"
+            },
+            "reasoning": "Spend with zero sales. Pause to stop wasted budget.",
+            "confidence_score": 99
+        }
+
+    return None  # Needs AI judgment
+
+
+# ============================================================
+# ← ADDED: Single chunk API call — used by parallel executor
+# ============================================================
+def call_api_chunk(chunk: list) -> list:
+    response = client.chat.completions.create(
+        model="anthropic/claude-haiku-4-5",
+        temperature=0.2,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": json.dumps(chunk)}
+        ]
+    )
+    raw = response.choices[0].message.content
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        match = re.search(r"\[.*\]", raw, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group())
+            except Exception:
+                return []
+        return []
+
+
+# ============================================================
+# ← ADDED: Parallel caller — splits entities into chunks and
+#   fires all chunks simultaneously using a thread pool
+# ============================================================
+def call_api_parallel(entities: list, chunk_size: int = 5) -> list:
+    chunks = [entities[i:i+chunk_size] for i in range(0, len(entities), chunk_size)]
+    logger.info(f"Splitting {len(entities)} AI targets into {len(chunks)} parallel chunks of {chunk_size}")
+
+    results = []
+    with ThreadPoolExecutor(max_workers=len(chunks)) as executor:
+        futures = [executor.submit(call_api_chunk, chunk) for chunk in chunks]
+        for future in futures:
+            chunk_result = future.result()
+            results.extend(chunk_result)
+
+    return results
+
 
 @router.post("/campaign/{campaign_id}/optimize")
 def optimize_campaign(campaign_id: str, request: Request, start_date: str = None, end_date: str = None):
@@ -169,13 +231,11 @@ def optimize_campaign(campaign_id: str, request: Request, start_date: str = None
 
         if not rows:
             logger.warning("No performance data found for this campaign")
-            resp = {
+            return {
                 "success": True,
                 "message": "No performance data found for this campaign within the selected date range.",
                 "optimization": []
             }
-            logger.info(f"Returning 'no data' payload: {resp}")
-            return resp
 
         # ================= PREPARE ENTITIES =================
         entities = []
@@ -201,102 +261,68 @@ def optimize_campaign(campaign_id: str, request: Request, start_date: str = None
                 "spend": spend,
                 "sales": sales,
                 "purchases": purchases,
-                "acos": round(acos, 3) if acos is not None else None,
-                "roas": round(roas, 3) if roas is not None else None
+                "acos": round(acos, 3) if acos else None,
+                "roas": round(roas, 3) if roas else None
             })
 
+        logger.info(f"Prepared {len(entities)} entities for optimization")
 
-        logger.info(f"Prepared {len(entities)} entities for AI optimization")
+        # ================= PRE-FILTER ← ADDED =================
+        instant_results = []   # handled by Python, no API call
+        ai_entities = []       # need GPT-5 judgment
+        ai_entity_indices = [] # track original index for merge
 
-        # ================= OPENAI CALL =================
-        logger.info("Calling OpenAI for optimization")
-
-        ai_start = time.time()
-
-        client = get_openai_client()
-        response = client.chat.completions.create(
-
-            model="openai/gpt-5",
-            temperature=0.2,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": json.dumps(entities)}
-            ]
-        )
-
-        ai_duration = round(time.time() - ai_start, 3)
-        logger.info(f"OpenAI response received in {ai_duration} seconds")
-
-        raw_content = response.choices[0].message.content
-        logger.info(f"Raw AI response length: {len(raw_content)} characters")
-
-        # ================= JSON PARSING =================
-        try:
-            result = json.loads(raw_content)
-            logger.info("AI response parsed successfully (direct JSON)")
-        except json.JSONDecodeError:
-            logger.warning("AI returned invalid JSON. Attempting regex extraction")
-            logger.warning(f"Raw AI Output:\n{raw_content}")
-
-            match = re.search(r"\[.*\]", raw_content, re.DOTALL)
-
-            if match:
-                try:
-                    result = json.loads(match.group())
-                    logger.info("Regex JSON extraction successful")
-                except Exception:
-                    logger.error("Regex JSON extraction failed")
-                    result = []
+        for i, entity in enumerate(entities):
+            pre_result = pre_filter(entity)
+            if pre_result:
+                instant_results.append((i, pre_result))
+                logger.info(f"Pre-filtered '{entity['entity']}' → {pre_result['decision']} (no API call needed)")
             else:
-                logger.error("No JSON array detected in AI response")
-                result = []
+                ai_entities.append(entity)
+                ai_entity_indices.append(i)
 
-        if isinstance(result, str):
-            try:
-                result = json.loads(result)
-            except:
-                result = []
+        logger.info(f"Pre-filtered: {len(instant_results)} instant | Sending to GPT-5: {len(ai_entities)}")
 
-        if not isinstance(result, list):
-            result = []
+        # ================= OPENAI CALL (PARALLEL) ← CHANGED =================
+        ai_results = []
 
-        cleaned_result = []
-        for item in result:
-            if isinstance(item, dict):
-                cleaned_result.append(item)
-            elif isinstance(item, str):
-                try:
-                    parsed_item = json.loads(item)
-                    if isinstance(parsed_item, dict):
-                        cleaned_result.append(parsed_item)
-                except:
-                    continue
+        if ai_entities:
+            logger.info("Calling OpenAI with parallel chunks")
+            ai_start = time.time()
 
-        result = cleaned_result
+            ai_results = call_api_parallel(ai_entities, chunk_size=5)  # ← fires chunks in parallel
 
-        logger.info(f"Final cleaned AI result count: {len(result)}")
+            ai_duration = round(time.time() - ai_start, 3)
+            logger.info(f"OpenAI parallel response received in {ai_duration} seconds")
+        else:
+            logger.info("All targets pre-filtered — skipping OpenAI call entirely")
 
         # ================= MERGE RESULTS =================
+        # Build a lookup: original entity index → ai result
+        ai_lookup = {}
+        for j, ai_row in enumerate(ai_results):
+            if j < len(ai_entity_indices):
+                original_index = ai_entity_indices[j]
+                ai_lookup[original_index] = ai_row
+
+        # Add pre-filtered results to lookup
+        for original_index, pre_row in instant_results:
+            ai_lookup[original_index] = pre_row
+
         merged_results = []
-
-        for index, ai_row in enumerate(result):
-
-            if index >= len(entities):
-                continue
-
-            matching_entity = entities[index]
-
+        for i, entity in enumerate(entities):
+            ai_row = ai_lookup.get(i, {})
             merged_results.append({
-                "entity": matching_entity["entity"],
-                "current_bid": matching_entity["current_bid"],
-                "impressions": matching_entity["impressions"],
-                "clicks": matching_entity["clicks"],
-                "ctr_percent": matching_entity["ctr_percent"],
-                "spend": matching_entity["spend"],
-                "sales": matching_entity["sales"],
-                "purchases": matching_entity["purchases"],
-                "acos": matching_entity["acos"],
-                "roas": matching_entity["roas"],
+                "entity": entity["entity"],
+                "current_bid": entity["current_bid"],
+                "impressions": entity["impressions"],
+                "clicks": entity["clicks"],
+                "ctr_percent": entity["ctr_percent"],
+                "spend": entity["spend"],
+                "sales": entity["sales"],
+                "purchases": entity["purchases"],
+                "acos": entity["acos"],
+                "roas": entity["roas"],
                 "decision": ai_row.get("decision"),
                 "suggested_bid": ai_row.get("suggested_bid"),
                 "target_roas": ai_row.get("target_roas"),
@@ -310,24 +336,34 @@ def optimize_campaign(campaign_id: str, request: Request, start_date: str = None
         logger.info(f"Optimize endpoint completed in {total_time} seconds")
         logger.info("========== OPTIMIZE END ==========")
 
-        resp = {
+        return {
             "success": True,
             "message": f"Successfully analyzed {len(entities)} targets for optimization.",
             "campaign_id": campaign_id,
             "optimization": merged_results
         }
-        logger.info(f"Returning final success payload: {resp}")
-        return resp
 
     except Exception as e:
-        logger.error("CRITICAL ERROR in optimize endpoint")
-        logger.error(str(e))
+        error_msg = str(e)
+        logger.error(f"CRITICAL ERROR in optimize endpoint: {error_msg}")
+        
+        # Check for OpenRouter 402 - Payment Required
+        if "402" in error_msg or "credits" in error_msg.lower():
+            return JSONResponse(
+                status_code=402,
+                content={
+                    "success": False,
+                    "message": "More Credits needed.",
+                    "error": "OpenRouter Credit Depletion"
+                }
+            )
+
         logger.error(traceback.format_exc())
         return JSONResponse(
             status_code=500,
             content={
                 "success": False,
-                "message": f"Server Error: {str(e)}",
-                "error": str(e)
+                "message": f"Server Error: {error_msg}",
+                "error": error_msg
             }
         )

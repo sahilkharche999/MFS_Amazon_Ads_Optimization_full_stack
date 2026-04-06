@@ -3,3 +3,10 @@ uvicorn[standard]==0.30.1
 openai
 python-dotenv==1.0.1
 pymysql
+fal-client
+PyMuPDF
+python-multipart
+python-docx
+Pillow
+aiohttp
+boto3
