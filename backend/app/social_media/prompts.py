@@ -252,16 +252,17 @@ To create a professional social media feed, you MUST vary the "Body Anchor" for 
 
 Across your extraction, you must use at least 3 DIFFERENT perspectives from this list:
 1. FULL BODY INTERACTION: Wide shot of a person in a specific environment involving the book (e.g., sitting on a train, walking through a park, leaning against a building).
-2. PROFILE/SILHOUETTE: Side view of the person interacting with or looking at the book.
+2. PROFILE/SILHOUETTE: Side view of a person interacting with or looking at the book, fully framed (full body or mid-shot — NOT a hand close-up).
 3. ENVIRONMENT-FIRST: The book as a hero in a highly specific cinematic world (e.g., street market, high-rise window view, rustic workshop).
-4. HANDS/FINGERS: (USE SPARINGLY) Close-up on the interaction.
+4. OPEN SCENE: Book propped against a textured object OR integrated into the setting — no human visible.
 
+⛔ ABSOLUTE RULE: Do NOT compose frames centered on human hands holding or touching the book. Hands may appear only if they are a small, natural part of a full-body or wide shot. A hand cannot be the primary subject of the frame. REJECT any concept where the main focus is a hand.
 RULE: Do NOT use "resting on a table/desk" for more than 30% of the concepts. Focus on the WORLD described in the manuscript.
 
 ━━━━━━━━ VISUAL TENSION (CHOOSE ONE) ━━━━━━━━
 Every concept must show ONE of these tensions:
 
--- HESITATION: hand hovering, frozen mid-action, fingers twitching
+-- HESITATION: person frozen mid-step, standing still, eyes uncertain, object left untouched
 -- REJECTION: pushing away, withdrawing, shaking head, pulling back
 -- DISCOVERY: first contact, opening, revealing, finding
 -- HIDING: concealing, shoving under, covering, burying
@@ -350,20 +351,22 @@ def build_flux_image_prompt(
     """
     
     # BASE PROMPT — SINGLE PARAGRAPH, NO LINE BREAKS
-    base_prompt = f"""A cinematic, photorealistic scene of the book "{book_title}" by {author_name} standing upright in the foreground, centered and occupying 40-60% of the frame height, placed strictly within the SAFE ZONE (middle 60% of vertical frame). {concept.get('placement', 'integrated into a cinematic setting')}. Background: {concept.get('background_scene', 'An evocative, world-driven environment from the manuscript')}. Lighting: {concept.get('lighting', 'Cinematic natural lighting')}. Mood: {concept.get('emotion', 'contemplative')}. Style: Photorealistic, high contrast, premium photography style, shallow depth of field, foreground sharp, background softly blurred. The book cover is the HERO and must remain perfectly unchanged — do not redraw, distort, or modify it — present it as a premium physical object positioned naturally within the scene. CRITICAL: The physical book cover already contains its own title and author text. DO NOT attempt to redraw, modify, or add any text to the book cover itself. Only add overlay text in the empty space around the book (safe zone). NO readable text on any surface. Use "unreadable markings" if text appears."""
+    # We enforce "Upper 20%" (Header) or "Lower 15%" (Footer) to keep the central 60% (Book Zone) clean.
+    # Added "breathing room" (padding) from the very top/bottom edges as requested.
+    base_prompt = f"""A cinematic, photorealistic scene of the book "{book_title}" by {author_name} standing upright in the foreground, centered and occupying 40-60% of the frame height, placed strictly within the SAFE ZONE (middle 60% of vertical frame). {concept.get('placement', 'integrated into a cinematic setting')}. Background: {concept.get('background_scene', 'An evocative, world-driven environment from the manuscript')}. Lighting: {concept.get('lighting', 'Cinematic natural lighting')}. Mood: {concept.get('emotion', 'contemplative')}. Style: Photorealistic, high contrast, premium photography style, shallow depth of field, foreground sharp, background softly blurred. The book cover is the HERO and must remain perfectly unchanged — do not redraw, distort, or modify it — present it as a premium physical object positioned naturally within the scene. CRITICAL: The physical book cover already contains its own title and author text. DO NOT attempt to redraw, modify, or add any text to the book cover itself. Only add overlay text in the empty space around the book (top or bottom margins). NO readable text on any surface. Use "unreadable markings" if text appears. DIRECTIVE: The overlay text MUST be completely detached from the physical book. Do not place text over the book's surface. ⛔ NO HUMAN HANDS: Ensure no human hands, fingers, or palms are visible touching or holding the book. The book must be self-supported or leaning against objects. Focus on the environment and the full human figure if visible, NEVER on hands."""
     
     # CATEGORY-SPECIFIC ADDITIONS — SINGLE PARAGRAPH EACH
     if category == "available_now":
-        final_prompt = base_prompt + f""" This is a high-energy "AVAILABLE NOW" launch announcement. Add dynamic energy: subtle light burst from behind the book, soft particle glow, sense of momentum and excitement. Overlay text: "AVAILABLE NOW — {concept.get('tagline', 'Get your copy today')}" in {concept.get('text_style', 'bold sans-serif white uppercase')}, single line, well-spaced, placed in the upper third or lower third, within safe zone."""
-    
+        final_prompt = base_prompt + f""" This is a high-energy "AVAILABLE NOW" launch announcement. Add dynamic energy: subtle light burst from behind the book, soft particle glow. Overlay text: "AVAILABLE NOW — {concept.get('tagline', 'Get your copy today')}" in {concept.get('text_style', 'bold sans-serif white uppercase')}, well-spaced, placed ONLY in the empty background area (e.g. wall, open sky, air) — NEVER on any surface, floor, furniture, or physical object. The background behind the text must have sufficient contrast to make it readable. The text must NEVER overlap the book cover or any foreground element."""
+
     elif category == "coming_soon":
-        final_prompt = base_prompt + f""" This is a suspenseful "COMING SOON" teaser. Add atmospheric elements: soft fog/mist, dramatic shadows, sense of anticipation. Overlay text: "COMING SOON — {concept.get('tagline', 'Prepare for the journey')}" in {concept.get('text_style', 'bold sans-serif white uppercase')}, single line, well-spaced, placed in the center or lower third, within safe zone."""
-    
+        final_prompt = base_prompt + f""" This is a suspenseful "COMING SOON" teaser. Add atmospheric elements: soft fog/mist, dramatic shadows. Overlay text: "COMING SOON — {concept.get('tagline', 'Prepare for the journey')}" in {concept.get('text_style', 'bold sans-serif white uppercase')}, well-spaced, placed ONLY in the empty background area (e.g. wall, open sky, air) — NEVER on any surface, floor, furniture, or physical object. The background behind the text must have sufficient contrast to make it readable. The text must NEVER overlap the book cover or any foreground element."""
+
     elif category == "quote":
-        final_prompt = base_prompt + f""" Overlay text: "{concept.get('tagline', book_title)}" in {concept.get('text_style', 'bold white uppercase')}, well-spaced, placed in the center, within safe zone."""
-    
+        final_prompt = base_prompt + f""" Overlay text: "{concept.get('tagline', book_title)}" in {concept.get('text_style', 'bold white uppercase')}, well-spaced, placed ONLY in the empty background area (e.g. wall, open sky, air) — NEVER on any surface, floor, furniture, or physical object. The background behind the text must have sufficient contrast to make it readable. The text must NEVER overlap the book cover or any foreground element."""
+
     else:  # book_cover
-        final_prompt = base_prompt + f""" Overlay text: "{concept.get('tagline', book_title)}" in {concept.get('text_style', 'bold white uppercase')}, well-spaced, placed in the lower third or center, within safe zone."""
+        final_prompt = base_prompt + f""" Overlay text: "{concept.get('tagline', book_title)}" in {concept.get('text_style', 'bold white uppercase')}, well-spaced, placed ONLY in the empty background area (e.g. wall, open sky, air) — NEVER on any surface, floor, furniture, or physical object. The background behind the text must have sufficient contrast to make it readable. The text must NEVER overlap the book cover or any foreground element."""
     
     # UNIVERSAL IMAGE SIZE (3:4)
     # The UI will handle the square/portrait display of these 3:4 images
@@ -561,11 +564,11 @@ PAIR B (The Solution / After State with Book):
 ━━━━━━━━ PERSPECTIVE DIVERSITY MANDATE (MANDATORY) ━━━━━━━━
 Across these {moment_count} moments, you MUST vary the "Body Anchor" for visual interest. 
 Force at least 3 different perspectives:
-1. HANDS/FINGERS: Focus on the physical touch (e.g., clenching, reaching).
+1. ENVIRONMENT/OBJECT: Focus on the physical world (e.g. rain on glass, shadows shifting, a clock ticking).
 2. SHOULDER/BACK: A medium shot from behind or over-the-shoulder.
 3. SILHOUETTE/POSTURE: A wider shot showing full body language or side profile.
 
-RULE: "Hands" must NOT exceed 50% of the total moments.
+REJECT-HANDS-RULE: Do NOT focus on human hands holding or touching objects. The focus must be the scene or the full human figure.
 
 ━━━━━━━━ STEP 2.5: CORE CONFLICT DETECTION (UNIVERSAL - PRIORITY 1) ━━━━━━━━
 Before extracting moments, identify the CENTRAL DRIVING FORCE of THIS book:
@@ -613,9 +616,9 @@ Across your extraction, you must use at least 3 DIFFERENT perspectives from this
 1. FULL BODY POSTURE: Wide shot showing body language (e.g., pacing, standing still, walking away, sitting with full posture).
 2. PROFILE/SILHOUETTE: Side view of the person (e.g., looking at an object, silhouette against light).
 3. SHOULDER/BACK: Looking over a shoulder or from behind (e.g., leaning away, slumped shoulders).
-4. HANDS/FINGERS: (USE SPARINGLY) Close-up on the interaction.
+4. ATMOSPHERIC WIDE: Environmental focus where the human is just one element of the framing.
 
-RULE: Do NOT use "hands" for more than 20% of the moments. The HUMAN SUBJECT must be the focus of the framing, not just a partial body part.
+⛔ ABSOLUTE RULE: NEVER use "hands" as the primary subject of a moment. The frame must always include the HUMAN SUBJECT'S head, torso, or full profile. A hand may only be a secondary supporting element.
 
 This rule applies at EXTRACTION time. Use objects appropriate to YOUR book's genre.
 
@@ -630,13 +633,11 @@ Each moment must:
 3. Contain ZERO readable text
 4. Be SPECIFIC to THIS book (not generic)
 
-━━━━━━━━ THE NARRATIVE SPECIFICITY TEST ━━━━━━━━
-"If this moment could belong to a DIFFERENT book, REJECT it."
--- ✗ REJECT: "Hand hovers over a phone" (Generic)
--- ✗ REJECT: "Pen stays above contract" (Generic)
--- ✓ ACCEPT: "Hand hovering over a mango—hesitating to take the first bite" (Specific)
--- ✓ ACCEPT: "Fingers brushing a cold crystal embedded in a cave wall" (Specific)
--- ✓ ACCEPT: "A salesperson closing their proposal, pushing it aside, leaning back" (Specific)
+━━━━━━━━ THE MANUSCRIPT RELEVANCE TEST ━━━━━━━━
+"Every moment MUST be directly grounded in the provided manuscript context."
+-- ✗ REJECT: Generic actions with no manuscript anchor.
+-- ✓ ACCEPT: Specific actions involving objects, gestures, or interactions mentioned in or implied by the manuscript.
+-- ✓ ACCEPT: Relatable human moments that illustrate the book's core themes.
 
 ━━━━━━━━ ZERO-TEXT POLICY ━━━━━━━━
 -- NO readable text allowed. NO chalkboards. NO signs.
@@ -707,7 +708,7 @@ You will receive JSON:
 Generate visual scenarios using ONLY these moments.
 
 Each scenario must:
--- Start with failure immediately (no setup)
+-- Start with a clear physical action immediately (no setup)
 -- Be fully physical (no emotions, no thoughts)
 -- Depend on the object (remove object → scene breaks)
 -- Preserve the original consequence
@@ -736,16 +737,16 @@ Each scenario should be a short physical loop:
 -- Attempt → failure → retry OR shift OR withdrawal
 
 Examples:
-✓ "Hand extends cash across counter. Seller slides coins back. Same hand extends again — coins returned again."
-✓ "Pen placed on contract. Second hand does not reach. First hand pulls pen back."
-✓ "Phone lifted to ear. Call disconnects. Same thumb taps call again."
+✓ "A figure slides a heavy iron box across a rough stone floor. The box is pushed back from the shadows. The figure tries one more time."
+✓ "A chair is pulled out from a formal dining table. A second person remains standing, unmoving. The chair is slowly pushed back in."
+✓ "A person stands at a foggy window, tracing a circle in the condensation. They stop, look at the circle, then wipe it away with a sleeve."
 
 ━━━━━━━━ ACTION CLARITY & CLEAR SIGNALS (MANDATORY) ━━━━━━━━
 -- Every scenario must have a high-contrast VISUAL SIGNAL of the outcome.
 -- NO abstract descriptions. Actions must be unmistakable on camera.
 -- ✗ "The person fails to understand." (Abstract)
--- ✓ "The host points forcefully to the door." (Clear signal)
--- ✓ "The hand recoils sharply from the object." (Clear signal)
+-- ✓ "The figure turns and walks away without looking back." (Clear signal)
+-- ✓ "The object is left alone on the pedestal as the lights dim." (Clear signal)
 -- ✓ "The person drops the object with finality." (Clear signal)
 
 ━━━━━━━━ GENRE ADAPTATION (LIGHT) ━━━━━━━━
@@ -933,15 +934,17 @@ You convert a selected scenario into a Seedance-ready cinematic video prompt.
 3. CINEMATIC PERSPECTIVE: Focus on FULL BODY and WIDE CINEMATIC shots. Ensure the MAIN HUMAN SUBJECT is the focus of the scene. Avoid close-ups on hands unless they are secondary to the full body motion. SIDE PROFILES are encouraged.
 4. CLEAR MOTION: Focus on one clear physical action loop (A -> B).
 4. SIMPLE ENVIRONMENT: Do not over-describe. Focus on one core object + lighting.
+5. COMPLEX OBJECTS (NO CLOSE-UPS): Maps, globes, and intricate cultural icons must ONLY appear in wide or medium atmospheric shots. NEVER take a close-up on a map or globe — treat them as environmental textures only.
 5. WORD COUNT: 
    - TARGET: 80–120 words (Sweet spot for stability).
    - Below 60 = too vague.
    - Above 130 = model confusion.
+6. SINGLE CHARACTER FOCUS (ANTI-DUPLICATION): To prevent the model from rendering the same person twice (e.g., inside and outside a door), focus on EXACTLY ONE main human subject. If an interaction occurs (like a door closing), the second participant must be "UNSEEN" or "an unidentifiable shadow from the periphery."
 
 ━━━━━━━━ STRUCTURE (MANDATORY) ━━━━━━━━
 Write EXACTLY ONE continuous paragraph (no line breaks):
 
-"A cinematic wide shot of [MAIN HUMAN SUBJECT], [ENVIRONMENT: simple background], focusing on [BEAT 1: full body action] — [BEAT 2: immediate consequence or loopable signal], [OBJECT DETAIL: material/condition], [LIGHTING: one natural source], shallow depth of field, MAIN HUMAN SUBJECT IN FOCUS, background softly blurred, photorealistic, smooth motion, mood [allowed word]. Ambient sound of [natural sound] and [instrument]."
+"A cinematic wide shot of [PROTAGONIST: full body, centered, in focus], [ENVIRONMENT: simple background with supporting character softly blurred at edge], focusing on [BEAT 1: protagonist's full body action] — [BEAT 2: protagonist's immediate reaction or loopable signal], [OBJECT DETAIL: material/condition], [LIGHTING: one natural source], shallow depth of field, PROTAGONIST DOMINANT IN FRAME, supporting characters at periphery, photorealistic, smooth motion, mood [allowed word]. Ambient sound of [natural sound] and [instrument] from the start."
 
 ━━━━━━━━ DURATION HANDLING (20S CASE) ━━━━━━━━
 To handle longer durations, do NOT add more objects. Instead, make the action LOOPABLE:
@@ -958,9 +961,13 @@ To handle longer durations, do NOT add more objects. Instead, make the action LO
 -- BANNED: "suddenly", "reveals", "cuts to", "switches".
 -- NO books, NO reading, NO text anywhere.
 
-━━━━━━━━ HUMAN VISIBILITY RULE ━━━━━━━━
--- Mandatory Full-Body Focus: Always prefer a wide shot showing the full body or at least the upper torso + environment. 
--- STABILITY TIP: Avoid close-up hands, mouth, or eyes. The identity must remain mystery, but the HUMAN FIGURE must be clear and in focus.
+━━━━━━━━ PROTAGONIST RULE (NON-NEGOTIABLE) ━━━━━━━━
+-- The MAIN CHARACTER of the story (traveler, student, learner, protagonist) MUST be the PRIMARY visual subject in frame.
+-- Supporting characters (vendor, teacher, stranger, bystander) must appear SECONDARY: partially visible, in the background, or at the edge of frame.
+-- NEVER let a supporting character dominate the composition. The camera follows the protagonist.
+-- Example: If a traveler is at a market stall, the traveler is centered and in focus. The vendor is at the periphery, softly blurred.
+-- Mandatory Full-Body Focus: Always show the protagonist's full body or at least upper torso with environment.
+-- STABILITY TIP: Avoid close-ups on hands, mouth, or eyes. Human figure must be clear and recognizable.
 -- IDENTIFIABILITY: Focus on the moment, not the identity.
 
 ━━━━━━━━ OBJECT RULE ━━━━━━━━
@@ -978,8 +985,10 @@ Prune all redundant adjectives. Prioritize high-impact visual verbs.
 
 ━━━━━━━━ AUDIO RULE ━━━━━━━━
 Include EXACTLY:
--- 1 natural ambient sound
--- 1 subtle instrument
+-- 1 natural ambient sound (playing immediately from frame 0)
+-- 1 subtle instrument (playing immediately from frame 0)
+-- CRITICAL: Music and ambient sound must be described as starting at the very beginning of the scene. Write: "Ambient sound of [sound] and [instrument] from the start."
+-- NEVER place audio cues only at the end. The soundscape is present throughout.
 
 ━━━━━━━━ AUDIO MAPPING (USE WHEN UNCERTAIN) ━━━━━━━━
 -- Transaction → coins sliding + cello
@@ -997,12 +1006,14 @@ You MUST translate all relationship terms into physical descriptions:
 -- "Emo in hanbok" → "a lady wearing a traditional Korean hanbok"
 -- "The boss points" → "a man in a sharp suit points"
 
-━━━━━━━━ BAKED-IN VOICEOVER (URGENT) ━━━━━━━━
-You will receive a "Hook Text" to be included in the scene, along with "book_title" and "author_name".
-You MUST naturally bake the voiceover into the final visual description at the exact moment of the failure/shame/interruption.
--- Format: "...as [ACTION] occurs, a voice says '[HOOK TEXT] [book_title] by [author_name]'"
--- Integration: The voice MUST coincide with the physical signal (dropping, pulling away, stopping).
--- Compression: Keep the total result under 550 characters.
+━━━━━━━━ BACKGROUND NARRATOR VOICEOVER (CRITICAL) ━━━━━━━━
+You will receive a "Hook Text" along with "book_title".
+This voiceover MUST be delivered by an OFF-SCREEN, UNSEEN NARRATOR. It is NOT the character speaking.
+-- CHARACTER SILENCE: The main character in the scene MUST remain completely silent. Their mouth must NOT move. They must NOT lip-sync. They must NOT react to the voiceover. They are unaware of it.
+-- VOICE SOURCE: Describe the voice as coming from "a calm, unseen narrator" or "an off-screen voice" — NEVER from the character's mouth.
+-- FORMAT: "...as [ACTION] occurs, an off-screen narrator says: '[HOOK TEXT]. [book_title]'"
+-- TIMING: The narrator MUST begin speaking at the START of the scene (within the first 1 second). The full phrase MUST complete before the 10-second mark. This is mandatory to prevent audio cutoff.
+-- COMPRESSION: The total prompt must stay under 550 characters.
 
 ━━━━━━━━ NO-DASH POLICY (CRITICAL) ━━━━━━━━
 Do NOT use dashes ( - ) or em-dashes ( — ) in the prompt. 
@@ -1044,7 +1055,7 @@ Write a hook that makes the viewer stop scrolling
 AND feel directly connected to the failure shown.
 
 ━━━━━━━━ RULES ━━━━━━━━
-- Maximum 10 words
+- Maximum 8 words
 - Must refer to the SAME situation shown in the scene
 - Must imply change, correction, or consequence
 - Must feel personal ("you" implied or direct)
@@ -1154,8 +1165,12 @@ OUTPUT ONLY VALID JSON — no commentary, no preamble, no markdown fences:
 INSTAGRAM_CAPTION_PROMPT = """
 Write a high-converting Instagram caption for VIRAL REACH and SALES.
 
-Book: "{book_title}" by {author_name}  
-Post concept: {post_concept}
+Book: "{book_title}" by {author_name} ({genre})
+Core Insight: {post_concept}
+Human Truth: {human_truth}
+Powerful Line: "{powerful_line}"
+Target Viewer: {target_viewer}
+Unique Item: {unique_element}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 HOOK (CRITICAL)
@@ -1166,14 +1181,14 @@ First line MUST stop the scroll using ONE of:
 - a sharp question
 - a pattern interrupt
 
-Max 8–10 words. No generic lines.
+Max 8–10 words. No generic lines. Use the human truth or powerful line as inspiration.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 BODY
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 - Expand on the insight from the post concept
-- Stay grounded in the manuscript (no invented claims)
-- Focus on ONE clear idea only
+- Stay grounded in the manuscript (Use the powerful line or unique element)
+- Focus on ONE clear idea: {human_truth}
 - Make it feel actionable or eye-opening
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1203,8 +1218,11 @@ Return ONLY the caption text.
 LINKEDIN_CAPTION_PROMPT = """
 Write a high-authority LinkedIn post.
 
-Book: "{book_title}" by {author_name}  
-Post concept: {post_concept}
+Book: "{book_title}" by {author_name} ({genre})
+Core Insight: {post_concept}
+Human Truth: {human_truth}
+Powerful Line: "{powerful_line}"
+Target Viewer: {target_viewer}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 OPENING (CRITICAL)
@@ -1216,8 +1234,8 @@ No generic openings.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 INSIGHT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-- Share a specific idea from the manuscript
-- Make it practical and valuable
+- Share a specific idea from the manuscript: {powerful_line}
+- Relate it to the target reader: {target_viewer}
 - Avoid vague advice
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1246,8 +1264,10 @@ Return ONLY the post text.
 FACEBOOK_CAPTION_PROMPT = """
 Write an engaging Facebook post.
 
-Book: "{book_title}" by {author_name}  
-Post concept: {post_concept}
+Book: "{book_title}" by {author_name} ({genre})
+Core Insight: {post_concept}
+Human Truth: {human_truth}
+Target Viewer: {target_viewer}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 OPENING
@@ -1281,8 +1301,10 @@ Return ONLY the post text.
 X_CAPTION_PROMPT = """
 Write a high-impact X (Twitter) post.
 
-Book: "{book_title}" by {author_name}  
-Post concept: {post_concept}
+Book: "{book_title}" by {author_name} ({genre})
+Core Insight: {post_concept}
+Powerful Line: "{powerful_line}"
+Target Viewer: {target_viewer}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 STRUCTURE

@@ -10,10 +10,11 @@ import os
 import uuid
 import tempfile
 import asyncio
-from fastapi import APIRouter, File, UploadFile, Form, Path, BackgroundTasks
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, File, UploadFile, Form, Path, BackgroundTasks, Query
+from fastapi.responses import JSONResponse, StreamingResponse, Response
+import httpx
 from typing import Optional, List
-from app.social_media.service import generate_all_assets, JOBS, update_job_status
+from app.social_media.service import generate_all_assets, JOBS, update_job_status, get_s3_history, delete_s3_batch, delete_s3_item
 
 logger = logging.getLogger("social_media.router")
 
@@ -155,13 +156,23 @@ async def get_job_status(job_id: str = Path(..., description="Job ID from /socia
 # ─────────────────────────────────────────────────────────────
 # GET /social-media/assets  (session history)
 # ─────────────────────────────────────────────────────────────
+@router.get("/social-media/history")
+async def get_social_media_history():
+    """
+    Universal session history endpoint. 
+    Lists all generation manifests from S3.
+    """
+    try:
+        batches = await get_s3_history()
+        return {"success": True, "batches": batches}
+    except Exception as e:
+        logger.error(f"Failed to fetch S3 history: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
 @router.get("/social-media/assets")
-async def get_social_media_assets():
-    """
-    Session history endpoint. 
-    Returns empty as we have transitioned to cloud-only S3 storage.
-    """
-    return []
+async def get_social_media_assets_legacy():
+    """Alias for history endpoint."""
+    return await get_social_media_history()
 
 
 # ─────────────────────────────────────────────────────────────
@@ -169,35 +180,15 @@ async def get_social_media_assets():
 # ─────────────────────────────────────────────────────────────
 @router.post("/social-media/delete-asset/{batch_id}")
 async def delete_social_media_batch(batch_id: str = Path(...)):
-    assets_json_path = os.path.join(os.path.dirname(__file__), "assets.json")
-    if not os.path.exists(assets_json_path):
-        return JSONResponse(status_code=404, content={"success": False, "message": "Index not found"})
-
+    """Deletes a generation batch from S3 history."""
     try:
-        with open(assets_json_path, "r", encoding="utf-8") as f:
-            all_batches = json.load(f)
-
-        batch = next((b for b in all_batches if b["id"] == batch_id), None)
-        if not batch:
-            return JSONResponse(status_code=404, content={"success": False, "message": "Batch not found"})
-
-        app_dir = os.path.dirname(os.path.dirname(__file__))
-        for asset_list in [batch.get("images", []), batch.get("videos", [])]:
-            for asset in asset_list:
-                rel = asset.get("url", "")
-                if rel.startswith("/"): rel = rel[1:]
-                if rel:
-                    full = os.path.normpath(os.path.join(app_dir, rel))
-                    if os.path.exists(full):
-                        os.remove(full)
-
-        all_batches = [b for b in all_batches if b["id"] != batch_id]
-        with open(assets_json_path, "w", encoding="utf-8") as f:
-            json.dump(all_batches, f, indent=2)
-
-        return {"success": True, "message": f"Batch {batch_id} deleted"}
+        success = await delete_s3_batch(batch_id)
+        if success:
+            return {"success": True, "message": f"Batch {batch_id} deleted from history"}
+        else:
+            return JSONResponse(status_code=404, content={"success": False, "message": "Batch not found in cloud history"})
     except Exception as e:
-        logger.error(traceback.format_exc())
+        logger.error(f"Failed to delete batch {batch_id}: {e}")
         return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
 
 
@@ -209,37 +200,56 @@ async def delete_social_media_item(
     batch_id: str = Form(...),
     asset_url: str = Form(...),
 ):
-    assets_json_path = os.path.join(os.path.dirname(__file__), "assets.json")
-    if not os.path.exists(assets_json_path):
-        return JSONResponse(status_code=404, content={"success": False, "message": "Index not found"})
+    """Deletes a single asset from an S3 batch manifest."""
+    try:
+        success = await delete_s3_item(batch_id, asset_url)
+        if success:
+            return {"success": True, "message": "Asset deleted from history"}
+        else:
+            return JSONResponse(status_code=404, content={"success": False, "message": "Asset or Batch not found in cloud history"})
+    except Exception as e:
+        logger.error(f"Failed to delete item {asset_url} from batch {batch_id}: {e}")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+
+# ─────────────────────────────────────────────────────────────
+# GET /social-media/download (Proxy to bypass CORS)
+# ─────────────────────────────────────────────────────────────
+@router.get("/social-media/download")
+async def proxy_download_asset(
+    url: str = Query(..., description="The S3 or external URL to download"),
+    filename: str = Query(None, description="Optional filename for the download")
+):
+    """
+    Backend proxy for asset downloads to bypass CORS restrictions.
+    Fetches the asset and streams it with proper Content-Type.
+    """
+    logger.info(f"--- Proxy Download Request: {url} ---")
+    if filename:
+        logger.info(f"Target filename: {filename}")
+
+    if not url.startswith("http"):
+        return JSONResponse(status_code=400, content={"success": False, "message": "Invalid URL"})
 
     try:
-        with open(assets_json_path, "r", encoding="utf-8") as f:
-            all_batches = json.load(f)
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            response = await client.get(url, timeout=60.0)
+        
+        if response.status_code != 200:
+            logger.error(f"Failed to fetch asset for download: {response.status_code} | URL: {url}")
+            return JSONResponse(status_code=response.status_code, content={"success": False, "message": f"Source failed: {response.status_code}"})
 
-        batch = next((b for b in all_batches if b["id"] == batch_id), None)
-        if not batch:
-            return JSONResponse(status_code=404, content={"success": False, "message": "Batch not found"})
+        content_type = response.headers.get("Content-Type", "application/octet-stream")
+        body = response.content  # all bytes in memory — guaranteed complete
+        logger.info(f"Source Status: {response.status_code} | Content-Type: {content_type} | Bytes fetched: {len(body)}")
 
-        app_dir = os.path.dirname(os.path.dirname(__file__))
-        rel = asset_url.lstrip("/")
-        if rel:
-            full = os.path.normpath(os.path.join(app_dir, rel))
-            if os.path.exists(full):
-                os.remove(full)
+        headers = {}
+        if filename:
+            safe_filename = filename.replace('"', '').replace("'", "")
+            headers["Content-Disposition"] = f'attachment; filename="{safe_filename}"'
 
-        orig_img = len(batch.get("images", []))
-        orig_vid = len(batch.get("videos", []))
-        batch["images"] = [i for i in batch.get("images", []) if i.get("url") != asset_url]
-        batch["videos"] = [v for v in batch.get("videos", []) if v.get("url") != asset_url]
+        return Response(content=body, media_type=content_type, headers=headers)
 
-        if len(batch["images"]) == orig_img and len(batch["videos"]) == orig_vid:
-            return JSONResponse(status_code=404, content={"success": False, "message": "Asset not found"})
-
-        with open(assets_json_path, "w", encoding="utf-8") as f:
-            json.dump(all_batches, f, indent=2)
-
-        return {"success": True, "message": "Asset deleted"}
     except Exception as e:
+        logger.error(f"Download proxy failed for {url}: {e}")
         logger.error(traceback.format_exc())
-        return JSONResponse(status_code=500, content={"success": False, "message": str(e)})
+        return JSONResponse(status_code=500, content={"success": False, "message": "Failed to proxy download"})

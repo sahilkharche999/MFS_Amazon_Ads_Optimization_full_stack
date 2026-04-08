@@ -7,8 +7,8 @@ from typing import Optional
 
 # S3 Configuration
 S3_BUCKET = os.environ.get("S3_BUCKET")
-S3_REGION = os.environ.get("AWS_REGION", "us-east-1")
-S3_PUBLIC_URL = f"https://{S3_BUCKET}.s3.amazonaws.com"
+S3_REGION = os.environ.get("AWS_REGION", "us-east-2")
+S3_PUBLIC_URL = f"https://s3.{S3_REGION}.amazonaws.com/{S3_BUCKET}"
 
 # Initialize S3 client (allowing for missing credentials during startup to prevent crash if not yet set)
 try:
@@ -32,17 +32,20 @@ def get_content_type(file_path: Path) -> str:
     else:
         return 'application/octet-stream'
 
-def upload_to_s3(local_path: Path, s3_key: str) -> Optional[str]:
+def upload_to_s3(local_path: Path, s3_key: str, cache: bool = True) -> Optional[str]:
     if not s3_client or not S3_BUCKET:
         print("[S3 ERROR] S3 client or bucket not configured")
         return None
     try:
         content_type = get_content_type(local_path)
+        extra_args = {'ContentType': content_type}
+        if cache:
+            extra_args['CacheControl'] = 'public, max-age=31536000'  # Cache for 1 year
         s3_client.upload_file(
             str(local_path),
             S3_BUCKET,
             s3_key,
-            ExtraArgs={'ContentType': content_type}
+            ExtraArgs=extra_args
         )
         return f"{S3_PUBLIC_URL}/{s3_key}"
     except Exception as e:
@@ -65,3 +68,41 @@ def upload_manifest(job_id: str, manifest_data: dict) -> Optional[str]:
     url = upload_to_s3(temp_path, s3_key)
     temp_path.unlink()
     return url
+
+def list_manifests() -> list[str]:
+    """Lists all keys in the manifest/ prefix."""
+    if not s3_client or not S3_BUCKET:
+        return []
+    try:
+        response = s3_client.list_objects_v2(Bucket=S3_BUCKET, Prefix="manifest/")
+        if 'Contents' not in response:
+            return []
+        # Return keys sorted by last modified (newest first)
+        contents = sorted(response['Contents'], key=lambda x: x['LastModified'], reverse=True)
+        return [obj['Key'] for obj in contents if obj['Key'].endswith('.json')]
+    except Exception as e:
+        print(f"[S3 LIST ERROR] {e}")
+        return []
+
+def get_s3_object_json(s3_key: str) -> Optional[dict]:
+    """Reads a JSON file from S3 and returns it as a dict."""
+    if not s3_client or not S3_BUCKET:
+        return None
+    try:
+        response = s3_client.get_object(Bucket=S3_BUCKET, Key=s3_key)
+        return json.loads(response['Body'].read().decode('utf-8'))
+    except Exception as e:
+        print(f"[S3 READ ERROR] {s3_key}: {e}")
+        return None
+
+def delete_manifest(job_id: str) -> bool:
+    """Deletes the manifest file for a specific job from S3."""
+    if not s3_client or not S3_BUCKET:
+        return False
+    try:
+        s3_key = f"manifest/{job_id}.json"
+        s3_client.delete_object(Bucket=S3_BUCKET, Key=s3_key)
+        return True
+    except Exception as e:
+        print(f"[S3 DELETE ERROR] {job_id}: {e}")
+        return False
