@@ -256,7 +256,9 @@ async def generate_video(prompt: str, output_dir: Optional[str] = None) -> str:
 # ────────────────────────────────────────────────────────────
 # Video Outro Processing via FFmpeg
 # ────────────────────────────────────────────────────────────
-LOGO_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static", "branding", "MFS logo.png")
+APP_DIR = os.path.dirname(os.path.dirname(__file__))
+STATIC_DIR = os.path.join(APP_DIR, "static")
+LOGO_PATH = os.path.join(STATIC_DIR, "branding", "MFS logo.png")
 
 async def process_video_outro(video_local_url: str, cover_bytes: Optional[bytes] = None, hook_text: str = "", output_dir: Optional[str] = None) -> str:
     """
@@ -267,10 +269,15 @@ async def process_video_outro(video_local_url: str, cover_bytes: Optional[bytes]
     import tempfile
     import shutil
 
-    # Resolve paths
-    app_dir = os.path.dirname(os.path.dirname(__file__))
-    video_rel = video_local_url.lstrip("/")
-    video_path = os.path.join(app_dir, video_rel)
+    # ── Path Resolution (Improved for absolute paths) ────────────
+    # If it's already an absolute path (like /tmp/...), use it directly.
+    # Otherwise, resolve it relative to the app directory.
+    if os.path.isabs(video_local_url):
+        video_path = video_local_url
+    else:
+        app_dir = os.path.dirname(os.path.dirname(__file__))
+        video_rel = video_local_url.lstrip("/")
+        video_path = os.path.join(app_dir, video_rel)
 
     if not os.path.exists(video_path):
         logger.error(f"process_video_outro: input video not found: {video_path}")
@@ -294,7 +301,6 @@ async def process_video_outro(video_local_url: str, cover_bytes: Optional[bytes]
     except Exception as e:
         logger.warning(f"Audio detection failed: {e}. Assuming no audio.")
 
-    # ── Step 1: Prepare assets ───────────────────────────────────
     # Word-wrap the hook for 1000% safe rendering
     def _wrap_text(text, max_chars=35):
         words = text.split()
@@ -310,7 +316,26 @@ async def process_video_outro(video_local_url: str, cover_bytes: Optional[bytes]
             lines.append(" ".join(current_line))
         return "\n".join(lines[:3]) # Max 3 lines to avoid clutter
 
-    safe_hook = _wrap_text(hook_text.upper().replace("'", "\\'").replace(":", "\\:"))
+    # Robust escaping for FFmpeg drawtext:
+    # 1. Backslash, 2. Single Quote, 3. Colon, 4. Percent
+    import re
+    safe_hook = hook_text.upper()
+    
+    # Strip ALL non-ASCII characters to prevent square boxes in FFmpeg
+    safe_hook = re.sub(r'[^\x00-\x7F]+', '', safe_hook)
+    
+    # Escape in exact FFmpeg drawtext order:
+    # 1. Backslash (must be first), 2. Colon (param separator), 3. Single quote, 4. Comma (filter separator), 5. Semicolon (graph separator), 6. Percent
+    safe_hook = safe_hook.replace("\\", "\\\\")       # backslash → \\
+    safe_hook = safe_hook.replace(":", "\\:")          # colon → \:
+    safe_hook = safe_hook.replace("'", "")             # apostrophe → removed
+    safe_hook = safe_hook.replace(",", " ")            # comma → space
+    safe_hook = safe_hook.replace(";", " ")            # semicolon → space
+    safe_hook = safe_hook.replace("%", "\\%")          # percent → \%
+    safe_hook = safe_hook.replace("[", "").replace("]", "")  # brackets break filter graph labels
+    safe_hook = _wrap_text(safe_hook)
+    # FFmpeg drawtext newline handling: must be escaped as \n string
+    safe_hook = safe_hook.replace("\n", "\r")
     
     # Universal Font Fallback
     # On Mac: Helvetica, Avenir
@@ -341,7 +366,7 @@ async def process_video_outro(video_local_url: str, cover_bytes: Optional[bytes]
     text_filter_with_hook = (
         f"scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,"
         f"drawtext=fontfile='{FONT_PATH}':text='{safe_hook}':fontcolor=white:fontsize=45:line_spacing=10:"
-        f"box=1:boxcolor=black@0.6:boxborderw=30:x=(w-text_w)/2:y=h*0.75:enable='between(t,7,10)',"
+        f"box=1:boxcolor=black@0.6:boxborderw=30:x=(w-text_w)/2:y=h*0.75:enable='between(t\\,8\\,12)',"
         f"setsar=1,fps=25,format=yuv420p"
     )
 
@@ -401,6 +426,7 @@ async def process_video_outro(video_local_url: str, cover_bytes: Optional[bytes]
         logger.info(f"Processing video (audio={has_audio}) → {output_filename}")
         cmd = _build_cmd(text_filter_with_hook)
         
+        logger.info(f"FFmpeg command: {' '.join(cmd)}")
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         if proc.returncode != 0:
             logger.warning(f"FFmpeg failed with hook (libfreetype?): {proc.stderr[-500:]}")
@@ -413,7 +439,7 @@ async def process_video_outro(video_local_url: str, cover_bytes: Optional[bytes]
         
         logger.info(f"Video processing successful.")
     except Exception as e:
-        logger.error(f"process_video_outro failed: {e}")
+        logger.error(f"process_video_outro failed: {e}. Falling back to unbranded FAL video.")
         return video_local_url
     finally:
         if cover_path and os.path.exists(cover_path):
@@ -429,7 +455,7 @@ async def process_video_outro(video_local_url: str, cover_bytes: Optional[bytes]
 # ────────────────────────────────────────────────────────────
 # Caption Generation via OpenRouter (Async)
 # ────────────────────────────────────────────────────────────
-async def generate_caption(platform: str, post_concept: str, book_title: str, author_name: str) -> str:
+async def generate_caption(platform: str, post_concept: str, book_title: str, author_name: str, metadata: dict = {}) -> str:
     """
     Generate a platform-optimized caption for a given post concept.
     """
@@ -444,10 +470,16 @@ async def generate_caption(platform: str, post_concept: str, book_title: str, au
     if not prompt_template:
         raise ValueError(f"Unknown platform: {platform}")
 
+    # Injecting deep metadata for better grounding
     user_prompt = prompt_template.format(
         book_title=book_title,
         author_name=author_name,
         post_concept=post_concept,
+        powerful_line=metadata.get("most_powerful_line", ""),
+        human_truth=metadata.get("core_human_truth", ""),
+        target_viewer=metadata.get("target_viewer_moment", ""),
+        unique_element=metadata.get("unique_world_element", ""),
+        genre=metadata.get("primary_genre", "General")
     )
 
     client = get_openrouter_client()
@@ -764,7 +796,7 @@ def generate_fallback_concepts(metadata: dict, count: int) -> list:
         base["emotion"] = moods[mood_idx]
         
         if i % 3 == 0:
-            base["placement"] = base["placement"].replace("resting on", "held by unseen hands")
+            base["placement"] = base["placement"].replace("resting on", "rising from shadows")
         elif i % 3 == 1:
             base["placement"] = base["placement"].replace("resting on", "leaning against")
         
@@ -1063,7 +1095,11 @@ async def generate_video_prompt_pipeline(manuscript_text: str, metadata: dict, r
         scenarios = scenario_data.get("scenarios", [])
 
     if not scenarios:
-        raise ValueError("No scenarios generated from extraction.")
+        if moments:
+            logger.warning("[VIDEO PIPELINE] Scenario layer failed to generate scenarios. Falling back to raw moments.")
+            scenarios = [{"visual_script": m.get("action", "A cinematic scene."), "object": m.get("object", "object"), "consequence": m.get("consequence", "")} for m in moments]
+        else:
+            raise ValueError("No scenarios generated from extraction.")
 
     logger.info(f"[VIDEO PIPELINE] Scenario done. [SCENARIOS COUNT]: {len(scenarios)}")
 

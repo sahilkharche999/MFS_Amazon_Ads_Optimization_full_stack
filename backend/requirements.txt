@@ -10,3 +10,6 @@ python-docx
 Pillow
 aiohttp
 boto3
+httpx
+requests
+

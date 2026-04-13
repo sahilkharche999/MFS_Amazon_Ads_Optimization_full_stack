@@ -43,7 +43,14 @@ from app.social_media.prompts import (
     IMAGE_RANKING_PROMPT,
     build_flux_image_prompt
 )
-from app.social_media.s3_client import upload_video, upload_image, upload_manifest
+from app.social_media.s3_client import (
+    upload_video, 
+    upload_image, 
+    upload_manifest, 
+    list_manifests, 
+    get_s3_object_json, 
+    delete_manifest
+)
 import shutil
 from pathlib import Path
 import aiohttp
@@ -153,12 +160,20 @@ async def generate_all_assets(
     temp_dir.mkdir(parents=True, exist_ok=True)
     
     async def _download_file(url: str, local_path: Path):
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as response:
-                if response.status == 200:
-                    with open(local_path, "wb") as f:
-                        f.write(await response.read())
-                    return True
+        # Increased timeout to 60s for large files/slow connections
+        timeout = aiohttp.ClientTimeout(total=60)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            try:
+                async with session.get(url) as response:
+                    if response.status == 200:
+                        content = await response.read()
+                        with open(local_path, "wb") as f:
+                            f.write(content)
+                        return True
+                    else:
+                        logger.error(f"Download failed with status {response.status} for {url}")
+            except Exception as e:
+                logger.error(f"Error downloading {url}: {e}")
         return False
 
     _update_job("running", "Extracting manuscript text")
@@ -255,18 +270,21 @@ async def generate_all_assets(
     # Pad to required lengths
     while len(post_ideas) < total_posts: post_ideas.append(f"Key insight from {book_title}")
 
-    # ───────────────── Step 3.5: Generate Image Concepts (New Pipeline) ─────────
-    _update_job("running", "Generating image concepts from manuscript")
-    logger.info("Step 3.5: Running image concept pipeline")
+    image_concepts = []
+    if generate_images and cover_image_url:
+        # ───────────────── Step 3.5: Generate Image Concepts (New Pipeline) ─────────
+        _update_job("running", "Generating image concepts from manuscript")
+        logger.info("Step 3.5: Running image concept pipeline")
 
-    # Use the new pipeline (manuscript + metadata)
-    image_concepts = await generate_image_concepts_pipeline(
-        manuscript_text=manuscript_text,
-        metadata=metadata,
-        num_concepts=15  # Generate 15 concepts
-    )
-
-    logger.info(f"Generated {len(image_concepts)} image concepts")
+        # Use the new pipeline (manuscript + metadata)
+        image_concepts = await generate_image_concepts_pipeline(
+            manuscript_text=manuscript_text,
+            metadata=metadata,
+            num_concepts=15  # Generate 15 concepts
+        )
+        logger.info(f"Generated {len(image_concepts)} image concepts")
+    else:
+        logger.warning("Skipping image concept generation: generate_images=False or cover_image_url missing")
 
     # ───────────────── Step 4: Build Image Prompts ────────────────────────────
     _update_job("running", "Building image prompts")
@@ -307,7 +325,7 @@ async def generate_all_assets(
     # ───────────────── Step 5: Generate Images ────────────────────────────────
     images = []
 
-    if generate_images and cover_image_url:
+    if generate_images and cover_image_url and len(image_tasks) > 0:
         _update_job("running", f"Generating {len(image_tasks)} images via Flux Pro")
         logger.info(f"Step 5: Generating {len(image_tasks)} images via Flux Pro")
         
@@ -340,16 +358,31 @@ async def generate_all_assets(
             
             batch_results = await asyncio.gather(*[_gen_safe(t) for t in batch])
             
-            # ── Upload images to S3 ──
+            # ── Upload images to S3 with retry ──
             for b_idx, res in enumerate(batch_results):
                 if res["status"] == "ok" and res["url"]:
                     global_image_idx = batch_start + b_idx
                     local_img_path = temp_dir / f"image_{global_image_idx}.png"
-                    if await _download_file(res["url"], local_img_path):
+                    fal_url = res["url"]
+                    
+                    # Retry download up to 3 times before giving up
+                    downloaded = False
+                    for attempt in range(3):
+                        if await _download_file(fal_url, local_img_path):
+                            downloaded = True
+                            break
+                        logger.warning(f"Download attempt {attempt+1}/3 failed for image {global_image_idx}")
+                        await asyncio.sleep(2)
+                    
+                    if downloaded:
                         s3_url = upload_image(local_img_path, job_id, res["category"], global_image_idx)
                         if s3_url:
                             res["url"] = s3_url
                             logger.info(f"Image {global_image_idx} uploaded to S3: {s3_url}")
+                        else:
+                            logger.warning(f"S3 upload failed for image {global_image_idx}, keeping temporary FAL URL")
+                    else:
+                        logger.error(f"All download attempts failed for image {global_image_idx}. FAL URL may expire.")
             
             images.extend(batch_results)
             
@@ -372,7 +405,7 @@ async def generate_all_assets(
 
     # ── Step 6: Generate promotional video (FAL) ─────────────
     videos = []
-    if generate_videos:
+    if generate_videos and num_videos > 0:
         _update_job("running", f"Generating {num_videos} promotional videos (FAL)")
         logger.info(f"Step 6: Generating {num_videos} promotional videos")
         
@@ -386,24 +419,28 @@ async def generate_all_assets(
                     fal_prompt = result["fal_prompt"]
                     hook = result["hook"]
                     
-                    # Append Book Title and Subtitle for complete branding
+                    # Append Book Title and Subtitle for complete branding (NO AUTHOR per user request)
                     subtitle = metadata.get("subtitle", "")
-                    full_hook = f"{book_title.upper()}: {hook}"
+                    full_hook = book_title.upper()
                     if subtitle:
-                        full_hook = f"{full_hook} {subtitle}"
+                        full_hook = f"{full_hook}: {subtitle.upper()}"
                     
-                    hook = full_hook
+                    # Prepend hook text to the branded title
+                    final_hook = f"{hook}. {full_hook}"
+                    
+                    hook = final_hook
 
                     # ── Video Generation (Seedance) ──
                     _update_job("running", f"Dispatching video {idx+1} to FAL")
                     logger.info(f"Dispatching clean prompt to Seedance: {fal_prompt[:100]}...")
                     raw_path = await generate_video(fal_prompt, output_dir=str(temp_dir))
 
-                    _update_job("running", f"Processing video {idx+1} outro (FFmpeg)")
+                    _update_job("running", f"Finalizing branding for video {idx+1}... Almost done.")
                     logger.info(f"Processing video {idx+1} outro with FFmpeg...")
                     video_abs_path = await process_video_outro(raw_path, cover_bytes=cover_bytes, hook_text=hook, output_dir=str(temp_dir))
 
                     # ── Upload to S3 ──
+                    # We only upload the BRANDED version
                     s3_url = upload_video(Path(video_abs_path), job_id, idx)
                     if s3_url:
                         logger.info(f"Video {idx+1} uploaded to S3: {s3_url}")
@@ -430,20 +467,59 @@ async def generate_all_assets(
     ok_videos = sum(1 for v in videos if v["status"] == "ok")
     logger.info(f"Video generation summary. OK: {ok_videos}/{len(videos)}")
 
+    # ── Step 7: Generate Social Media Captions ───────────────
+    # Uses the first post idea as the anchor for the generic platform captions
+    _update_job("running", "Generating social media captions")
+    logger.info("Step 7: Generating platform captions")
+    
+    captions = {"instagram": [], "facebook": [], "linkedin": [], "x": []}
+    credits_exhausted = False
+    try:
+        from app.social_media.generators import generate_caption
+        platforms = ["instagram", "facebook", "linkedin", "x"]
+        
+        # Use first post idea for the platform-wide captions
+        concept_for_captions = post_ideas[0] if post_ideas else book_title
+        
+        caption_tasks = [generate_caption(p, concept_for_captions, book_title, author_name, metadata=metadata) for p in platforms]
+        caption_results = await asyncio.gather(*caption_tasks, return_exceptions=True)
+        
+        for platform, result_item in zip(platforms, caption_results):
+            if isinstance(result_item, Exception):
+                err_str = str(result_item)
+                if "402" in err_str or "credits" in err_str.lower():
+                    credits_exhausted = True
+                    logger.warning(f"OpenRouter credit limit hit during {platform} caption generation.")
+                    captions[platform] = ["⚠️ Credits Low — Recharge OpenRouter to generate captions."]
+                else:
+                    logger.error(f"Caption generation failed for {platform}: {result_item}")
+                    captions[platform] = []
+            else:
+                captions[platform] = [result_item]
+    except Exception as e:
+        err_str = str(e)
+        if "402" in err_str or "credits" in err_str.lower():
+            credits_exhausted = True
+            logger.warning(f"OpenRouter credit limit hit during caption generation: {e}")
+            for p in ["instagram", "facebook", "linkedin", "x"]:
+                captions[p] = ["⚠️ Credits Low — Recharge OpenRouter to generate captions."]
+        else:
+            logger.error(f"Caption generation failed: {e}")
+        
     # ── Step 8: Return assembled assets & Final Manifest ──
     _update_job("running", "Finalizing assets")
     
     # Upload manifest to S3
     manifest_data = {
+        "id": job_id,
         "job_id": job_id,
         "book_title": book_title,
         "author_name": author_name,
-        "created_at": datetime.now().isoformat(),
-        "videos": [v["url"] for v in videos if v["status"] == "ok"],
-        "images": [i["url"] for i in images if i["status"] == "ok"],
-        "full_images": images,  # Keep the objects for frontend
-        "full_videos": videos,  # Keep the objects for frontend
-        "captions": captions
+        "timestamp": datetime.now().isoformat(),
+        "images": [i for i in images if i["status"] == "ok" and i.get("url")],
+        "videos": [v for v in videos if v["status"] == "ok" and v.get("url")],
+        "captions": captions,
+        "credits_exhausted": credits_exhausted,
     }
     manifest_url = upload_manifest(job_id, manifest_data)
     logger.info(f"Manifest uploaded to S3: {manifest_url}")
@@ -452,7 +528,11 @@ async def generate_all_assets(
     shutil.rmtree(temp_dir, ignore_errors=True)
 
     result = {
+        "id": job_id,
         "job_id": job_id,
+        "book_title": book_title,
+        "author_name": author_name,
+        "timestamp": datetime.now().isoformat(),
         "manifest_url": manifest_url,
         "images": images,
         "videos": videos,
@@ -465,47 +545,75 @@ async def generate_all_assets(
     }
     return result
 
-    async def _gen_cap_safe(p, idea):
-        try:
-            return await generate_caption(
-                platform=p,
-                post_concept=idea,
-                book_title=book_title,
-                author_name=author_name,
-            )
-        except Exception as e:
-            logger.warning(f"Caption failed ({p}): {e}")
-            return f"[Generation failed: {str(e)}]"
+    return result
 
-    # Execute all 12 captions in parallel
-    results = await asyncio.gather(*[_gen_cap_safe(p, i) for p, i in caption_tasks])
+async def get_s3_history() -> list[dict]:
+    """Retrieves all session manifests from S3 to build the global history."""
+    import re
+    from .s3_client import list_manifests, get_s3_object_json
 
-    # Reconstruct the dict
-    captions = {p: [] for p in platforms}
-    for idx, res in enumerate(results):
-        p, idea = caption_tasks[idx]
-        captions[p].append(res)
+    def normalize_url(url: str) -> str:
+        if not url or "amazonaws.com" not in url:
+            return url
+        m = re.match(r"^https://([^.]+)\.s3\.([^.]+)\.amazonaws\.com/(.+)$", url)
+        if m:
+            bucket, region, key = m.group(1), m.group(2), m.group(3)
+            return f"https://s3.{region}.amazonaws.com/{bucket}/{key}"
+        return url
 
-    logger.info(f"Caption generation complete: {len(results)} total")
+    def make_image_obj(item, index):
+        if isinstance(item, dict):
+            item["url"] = normalize_url(item.get("url", ""))
+            item.setdefault("status", "ok")
+            return item
+        return {"url": normalize_url(item), "category": "book_cover", "status": "ok", "index": index}
 
-    # ── Step 8: Assemble final response ──────────────────────
-    logger.info("=== Pipeline complete ===")
-    final_output = {
-        "id":               str(uuid.uuid4()),
-        "timestamp":        datetime.now().isoformat(),
-        "book_title":      book_title,
-        "author_name":     author_name,
-        "images":           images,
-        "videos":           videos,
-        "captions":         captions,
-        "cover_image_url":  cover_image_url,
-        "stats": {
-            "total_images": len(images),
-            "images_ok":    ok_images,
-            "total_videos": len(videos),
-            "videos_ok":    ok_videos,
-            "used_img2img": cover_image_url is not None,
-        },
-    }
+    def make_video_obj(item):
+        if isinstance(item, dict):
+            item["url"] = normalize_url(item.get("url", ""))
+            item.setdefault("status", "ok")
+            return item
+        return {"url": normalize_url(item), "status": "ok"}
 
-    return final_output
+    manifest_keys = list_manifests()
+    logger.info(f"Found {len(manifest_keys)} manifests in S3")
+
+    batches = []
+    for key in manifest_keys:
+        manifest = get_s3_object_json(key)
+        if not manifest:
+            continue
+        if "id" not in manifest:
+            manifest["id"] = manifest.get("job_id", key.split("/")[-1].replace(".json", ""))
+        if "timestamp" not in manifest:
+            manifest["timestamp"] = manifest.get("created_at", "")
+        manifest["images"] = [make_image_obj(img, idx) for idx, img in enumerate(manifest.get("images", []))]
+        manifest["videos"] = [make_video_obj(v) for v in manifest.get("videos", [])]
+        batches.append(manifest)
+
+    return batches
+
+async def delete_s3_batch(job_id: str):
+    """Deletes a batch from S3 history."""
+    from app.social_media.s3_client import delete_manifest
+    return delete_manifest(job_id)
+
+async def delete_s3_item(job_id: str, asset_url: str):
+    """Deletes a specific item from the S3 manifest."""
+    from app.social_media.s3_client import get_s3_object_json, upload_manifest
+    s3_key = f"manifest/{job_id}.json"
+    manifest = get_s3_object_json(s3_key)
+    if not manifest:
+        return False
+
+    orig_img = len(manifest.get("images", []))
+    orig_vid = len(manifest.get("videos", []))
+
+    manifest["images"] = [i for i in manifest.get("images", []) if i.get("url") != asset_url]
+    manifest["videos"] = [v for v in manifest.get("videos", []) if v.get("url") != asset_url]
+
+    if len(manifest["images"]) == orig_img and len(manifest["videos"]) == orig_vid:
+        return False
+
+    upload_manifest(job_id, manifest)
+    return True

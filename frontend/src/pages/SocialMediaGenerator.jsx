@@ -1,4 +1,4 @@
-import { useState, useContext, useRef, memo } from "react";
+import { useState, useEffect, useContext, useRef, memo } from "react";
 import {
     Box,
     Typography,
@@ -71,7 +71,7 @@ const IMAGE_CATEGORIES = [
     { key: "book_cover", label: "Book Cover" },
     { key: "available_now", label: "Available Now" },
     { key: "coming_soon", label: "Coming Soon" },
-    { key: "quote", label: "Quotes" },
+    { key: "quote", label: "Narrative Beats" },
 ];
 
 const CAPTION_PLATFORMS = [
@@ -106,20 +106,18 @@ const PIPELINE_STEPS = [
 async function forceDownload(url, filename) {
     if (!url) return;
     try {
-        // For local assets, a simple anchor click is safer and respects proxy
-        if (!url.startsWith('http')) {
-            const link = document.createElement("a");
-            link.href = url;
-            link.download = filename || "asset";
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            return;
-        }
-        // For external assets, fetch is needed for forceful download
-        const response = await fetch(url);
+        // For external assets, route through the backend proxy to bypass CORS
+        // Use absolute URL since there's no Vite proxy configured
+        const backendBase = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api";
+        const fetchUrl = url.startsWith('http')
+            ? `${backendBase}/social-media/download?url=${encodeURIComponent(url)}`
+            : url;
+
+        const response = await fetch(fetchUrl);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const blob = await response.blob();
         const blobUrl = URL.createObjectURL(blob);
+
         const link = document.createElement("a");
         link.href = blobUrl;
         link.download = filename || "asset";
@@ -140,7 +138,13 @@ function cropToSquare(imageUrl) {
     return new Promise((resolve, reject) => {
         const img = new Image();
         img.crossOrigin = "anonymous";
-        img.src = imageUrl;
+
+        // If external, use our proxy to ensure same-origin for canvas
+        if (imageUrl && imageUrl.startsWith('http')) {
+            img.src = `/api/social-media/download?url=${encodeURIComponent(imageUrl)}`;
+        } else {
+            img.src = imageUrl;
+        }
 
         img.onload = () => {
             const { naturalWidth: w, naturalHeight: h } = img;
@@ -206,7 +210,8 @@ const ImageCard = memo(({ img, idx, globalIdx, captions, bookTitle, dark, onPrev
     const [captionOpen, setCaptionOpen] = useState(false);
     const isPortrait = displayFormat === "portrait";
 
-    console.log(`Rendering ImageCard ${idx}`); // Debug to verify memoization
+    const [imageLoaded, setImageLoaded] = useState(false);
+    const [imageError, setImageError] = useState(false);
 
     // Build the correct URL — use relative path for local assets so Vite proxy handles CORS
     const getFinalUrl = (url) => {
@@ -250,6 +255,21 @@ const ImageCard = memo(({ img, idx, globalIdx, captions, bookTitle, dark, onPrev
             >
                 {img.url ? (
                     <>
+                        {/* Shimmer skeleton while loading */}
+                        {!imageLoaded && !imageError && (
+                            <Box sx={{
+                                position: "absolute", inset: 0,
+                                background: dark
+                                    ? "linear-gradient(90deg, rgba(255,255,255,0.04) 25%, rgba(255,255,255,0.10) 50%, rgba(255,255,255,0.04) 75%)"
+                                    : "linear-gradient(90deg, #f0f0f0 25%, #e8e8e8 50%, #f0f0f0 75%)",
+                                backgroundSize: "200% 100%",
+                                animation: "shimmer 1.5s infinite",
+                                "@keyframes shimmer": {
+                                    "0%": { backgroundPosition: "200% 0" },
+                                    "100%": { backgroundPosition: "-200% 0" },
+                                }
+                            }} />
+                        )}
                         <img
                             src={finalUrl}
                             alt={`${img.category} ${idx + 1}`}
@@ -259,12 +279,22 @@ const ImageCard = memo(({ img, idx, globalIdx, captions, bookTitle, dark, onPrev
                                 objectFit: isPortrait ? "cover" : "contain",
                                 objectPosition: "center",
                                 display: "block",
-                                transition: "transform 0.5s ease",
+                                transition: "transform 0.5s ease, opacity 0.4s ease",
                                 transform: isHovered ? "scale(1.05)" : "scale(1)",
+                                opacity: imageLoaded ? 1 : 0,
                             }}
                             loading="lazy"
                             onClick={() => onPreview && onPreview(finalUrl, isPortrait ? "portrait" : "square")}
+                            onLoad={() => setImageLoaded(true)}
+                            onError={() => setImageError(true)}
                         />
+                        {/* Error state — only shown if image actually failed */}
+                        {imageError && (
+                            <Box sx={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 1, p: 2 }}>
+                                <Typography variant="caption" sx={{ color: "warning.main", textAlign: "center" }}>⚠️ Image failed to load</Typography>
+                                <Typography variant="caption" sx={{ color: "text.disabled", textAlign: "center", fontSize: "11px" }}>S3 upload may have failed.<br />Regenerate to get a new link.</Typography>
+                            </Box>
+                        )}
                         {/* Hover Overlay */}
                         <Box
                             sx={{
@@ -304,8 +334,9 @@ const ImageCard = memo(({ img, idx, globalIdx, captions, bookTitle, dark, onPrev
                         </Box>
                     </>
                 ) : (
-                    <Box sx={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                        <Typography variant="caption" sx={{ color: "error.main" }}>Generation failed</Typography>
+                    <Box sx={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 1, p: 2 }}>
+                        <Typography variant="caption" sx={{ color: "error.main" }}>No URL generated</Typography>
+                        <Typography variant="caption" sx={{ color: "text.disabled", fontSize: "11px", textAlign: "center" }}>FAL generation may have failed. Try regenerating.</Typography>
                     </Box>
                 )}
 
@@ -399,21 +430,44 @@ const ImageCard = memo(({ img, idx, globalIdx, captions, bookTitle, dark, onPrev
                         ))}
                     </Box>
                     <Box sx={{ position: "relative" }}>
-                        <Typography
-                            variant="caption"
+                        <Box
                             sx={{
                                 maxHeight: "80px",
                                 overflowY: "auto",
-                                fontSize: "11px",
-                                lineHeight: 1.4,
-                                color: "text.secondary",
                                 pr: 1,
                                 "&::-webkit-scrollbar": { width: "3px" },
                                 "&::-webkit-scrollbar-thumb": { background: "rgba(99,102,241,0.2)", borderRadius: "10px" }
                             }}
                         >
-                            {(captions[selectedPlat] || [])[globalIdx] || "Generating caption…"}
-                        </Typography>
+                            {(() => {
+                                const captionText = (captions[selectedPlat] || [])[globalIdx];
+                                const isCreditsError = captionText && (captionText.includes("Credits Low") || captionText.includes("402") || captionText.includes("Recharge"));
+                                if (isCreditsError) {
+                                    return (
+                                        <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, py: 0.5 }}>
+                                            <Typography variant="caption" sx={{ fontSize: "11px", color: "warning.main", fontWeight: 700 }}>
+                                                ⚡ Credits Low
+                                            </Typography>
+                                            <Typography variant="caption" sx={{ fontSize: "10px", color: "text.disabled" }}>
+                                                — Recharge OpenRouter to generate captions
+                                            </Typography>
+                                        </Box>
+                                    );
+                                }
+                                return (
+                                    <Typography
+                                        variant="caption"
+                                        sx={{
+                                            fontSize: "11px",
+                                            lineHeight: 1.4,
+                                            color: dark ? "rgba(255,255,255,0.65)" : "#374151",
+                                        }}
+                                    >
+                                        {captionText || "Generating caption…"}
+                                    </Typography>
+                                );
+                            })()}
+                        </Box>
                         <Box sx={{ position: "absolute", bottom: -2, right: -2 }}>
                             <CopyButton text={(captions[selectedPlat] || [])[globalIdx] || ""} size="small" />
                         </Box>
@@ -505,9 +559,15 @@ const VideoCard = memo(({ vid, idx, bookTitle, dark, onPreview, onDelete }) => {
                         style={{ width: "100%", height: "100%", objectFit: "cover" }}
                     />
                 ) : (
-                    <Box sx={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 1 }}>
-                        <Typography variant="caption" color="error">Generation failed</Typography>
-                        {vid.error && <Typography variant="caption" sx={{ px: 2, textAlign: "center", color: "text.disabled", fontSize: "9px" }}>{vid.error}</Typography>}
+                    <Box sx={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 1.5, p: 3 }}>
+                        <Typography variant="body2" sx={{ fontWeight: 700, color: "error.main", textAlign: "center" }}>
+                            Creative moment unavailable
+                        </Typography>
+                        <Typography variant="caption" sx={{ textAlign: "center", color: dark ? "rgba(255,255,255,0.4)" : "rgba(0,0,0,0.5)", fontSize: "10px", lineHeight: 1.4 }}>
+                            {vid.error && vid.error.includes("extraction")
+                                ? "We couldn't find a cinematic moment in this manuscript section. Try uploading a different excerpt."
+                                : (vid.error || "The AI encountered a temporary issue. Please try again.")}
+                        </Typography>
                     </Box>
                 )}
 
@@ -646,6 +706,19 @@ function CopyButton({ text }) {
 }
 
 // ─────────────────────────────────────────────────────────
+// Helper to normalize S3 URLs for DNS resilience
+const normalizeS3Url = (url) => {
+    if (!url || !url.includes("amazonaws.com")) return url;
+    // Transform bucket.s3.region.amazonaws.com/key -> s3.region.amazonaws.com/bucket/key
+    const match = url.match(/^https:\/\/([^.]+)\.s3\.([^.]+)\.amazonaws\.com\/(.+)$/);
+    if (match) {
+        const [, bucket, region, key] = match;
+        return `https://s3.${region}.amazonaws.com/${bucket}/${key}`;
+    }
+    return url;
+};
+
+// ─────────────────────────────────────────────────────────
 // Main Component
 // ─────────────────────────────────────────────────────────
 function SocialMediaGenerator() {
@@ -676,7 +749,15 @@ function SocialMediaGenerator() {
     const [progress, setProgress] = useState(0);
     const [pipelineStep, setPipelineStep] = useState(0);
     const [error, setError] = useState(null);
-    const [batches, setBatches] = useState([]); // All generated batches
+    // Persist batches to localStorage so they survive page refreshes
+    const [batches, setBatches] = useState(() => {
+        try {
+            const saved = localStorage.getItem("smg_batches");
+            return saved ? JSON.parse(saved) : [];
+        } catch {
+            return [];
+        }
+    });
     // ── Deletion state ──
     const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
     const [batchToDelete, setBatchToDelete] = useState(null);
@@ -698,20 +779,36 @@ function SocialMediaGenerator() {
         }));
     };
 
-    // ── Load history on mount ──
-    const fetchHistory = async () => {
+    // ── Persist batches to localStorage whenever they change ──
+    useEffect(() => {
         try {
-            setFetching(true);
-            const response = await api.get("/social-media/assets");
-            setBatches(Array.isArray(response.data) ? response.data : []);
+            localStorage.setItem("smg_batches", JSON.stringify(batches));
+        } catch { }
+        setFetching(false);
+    }, [batches]);
+
+    // ── Load history on mount (Universal S3 History) ──
+    const fetchHistory = async () => {
+        setFetching(true);
+        try {
+            // Priority 1: Fetch from Backend (Universal S3 manifests)
+            const res = await api.get("/social-media/history");
+            if (res.data.success && Array.isArray(res.data.batches)) {
+                // Deduplicate and merge (Backend is source of truth)
+                setBatches(res.data.batches);
+                return;
+            }
         } catch (err) {
-            console.error("Failed to fetch history:", err);
+            console.error("Failed to load history from API:", err);
+            // Fallback: localStorage
+            const saved = localStorage.getItem("smg_batches");
+            if (saved) setBatches(JSON.parse(saved));
         } finally {
             setFetching(false);
         }
     };
 
-    useState(() => {
+    useEffect(() => {
         fetchHistory();
     }, []);
 
@@ -892,7 +989,7 @@ function SocialMediaGenerator() {
         try {
             setDeleting(true);
             await api.post(`/social-media/delete-asset/${batchToDelete}`);
-            setBatches(prev => prev.filter(b => b.id !== batchToDelete));
+            setBatches(prev => prev.filter(b => (b.id || b.job_id) !== batchToDelete));
             setDeleteDialogOpen(false);
             setBatchToDelete(null);
         } catch (err) {
@@ -912,7 +1009,7 @@ function SocialMediaGenerator() {
 
             // Update local state
             setBatches(prev => prev.map(b => {
-                if (b.id === batchId) {
+                if ((b.id || b.job_id) === batchId) {
                     return {
                         ...b,
                         images: b.images.filter(img => img.url !== assetUrl),
@@ -1010,7 +1107,7 @@ function SocialMediaGenerator() {
 
                     {/* ── Manuscript upload (PDF/DOCX) ── */}
                     <Grid item xs={12} sm={6} md={3}>
-                        <Typography variant="caption" sx={{ color: "text.secondary", fontWeight: 600, mb: 1, display: "block", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                        <Typography variant="caption" sx={{ color: dark ? "rgba(255,255,255,0.55)" : "#374151", fontWeight: 700, mb: 1, display: "block", textTransform: "uppercase", letterSpacing: "0.5px" }}>
                             Manuscript *
                         </Typography>
                         <Box
@@ -1042,13 +1139,13 @@ function SocialMediaGenerator() {
                                 <>
                                     <CheckCircleIcon sx={{ fontSize: 36, color: "#22c55e" }} />
                                     <Typography variant="body2" sx={{ fontWeight: 600, color: "#22c55e", wordBreak: "break-all" }}>{file.name}</Typography>
-                                    <Typography variant="caption" sx={{ color: "text.secondary" }}>{(file.size / 1024 / 1024).toFixed(2)} MB · Click to change</Typography>
+                                    <Typography variant="caption" sx={{ color: dark ? "rgba(255,255,255,0.4)" : "#6b7280" }}>{(file.size / 1024 / 1024).toFixed(2)} MB · Click to change</Typography>
                                 </>
                             ) : (
                                 <>
                                     <CloudUploadIcon sx={{ fontSize: 36, color: dark ? "rgba(255,255,255,0.3)" : "rgba(0,0,0,0.25)" }} />
                                     <Typography variant="body2" sx={{ fontWeight: 600 }}>Drop PDF/DOCX or click</Typography>
-                                    <Typography variant="caption" sx={{ color: "text.secondary" }}>Manuscript · PDF or DOCX</Typography>
+                                    <Typography variant="caption" sx={{ color: dark ? "rgba(255,255,255,0.4)" : "#6b7280" }}>Manuscript · PDF or DOCX</Typography>
                                 </>
                             )}
                         </Box>
@@ -1056,7 +1153,7 @@ function SocialMediaGenerator() {
 
                     {/* ── Book Cover Image upload ── */}
                     <Grid item xs={12} sm={6} md={3}>
-                        <Typography variant="caption" sx={{ color: "text.secondary", fontWeight: 600, mb: 1, display: "block", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                        <Typography variant="caption" sx={{ color: dark ? "rgba(255,255,255,0.55)" : "#374151", fontWeight: 700, mb: 1, display: "block", textTransform: "uppercase", letterSpacing: "0.5px" }}>
                             Book Cover Image
                             <Chip label="Recommended" size="small" sx={{ ml: 1, fontSize: "9px", height: 16, background: "rgba(99,102,241,0.15)", color: "#6366f1", fontWeight: 700 }} />
                         </Typography>
@@ -1097,8 +1194,8 @@ function SocialMediaGenerator() {
                                 <>
                                     <CloudUploadIcon sx={{ fontSize: 36, color: dark ? "rgba(255,255,255,0.3)" : "rgba(0,0,0,0.25)" }} />
                                     <Typography variant="body2" sx={{ fontWeight: 600 }}>Drop cover or click</Typography>
-                                    <Typography variant="caption" sx={{ color: "text.secondary" }}>JPG / PNG / WebP</Typography>
-                                    <Typography variant="caption" sx={{ color: "text.disabled", mt: 0.5, fontSize: "10px" }}>
+                                    <Typography variant="caption" sx={{ color: dark ? "rgba(255,255,255,0.4)" : "#6b7280" }}>JPG / PNG / WebP</Typography>
+                                    <Typography variant="caption" sx={{ color: dark ? "rgba(255,255,255,0.25)" : "#6b7280", mt: 0.5, fontSize: "10px" }}>
                                         Used as reference for<br />image-to-image generation
                                     </Typography>
                                 </>
@@ -1124,6 +1221,11 @@ function SocialMediaGenerator() {
                                         borderRadius: "12px",
                                         background: dark ? "rgba(255,255,255,0.03)" : "#f9fafb",
                                     },
+                                    "& input:-webkit-autofill": {
+                                        WebkitBoxShadow: `0 0 0 1000px ${dark ? "#111827" : "#f9fafb"} inset`,
+                                        WebkitTextFillColor: dark ? "#ffffff" : "#111827",
+                                        transition: "background-color 5000s ease-in-out 0s",
+                                    },
                                 }}
                             />
                             <TextField
@@ -1137,6 +1239,11 @@ function SocialMediaGenerator() {
                                     "& .MuiOutlinedInput-root": {
                                         borderRadius: "12px",
                                         background: dark ? "rgba(255,255,255,0.03)" : "#f9fafb",
+                                    },
+                                    "& input:-webkit-autofill": {
+                                        WebkitBoxShadow: `0 0 0 1000px ${dark ? "#111827" : "#f9fafb"} inset`,
+                                        WebkitTextFillColor: dark ? "#ffffff" : "#111827",
+                                        transition: "background-color 5000s ease-in-out 0s",
                                     },
                                 }}
                             />
@@ -1152,7 +1259,7 @@ function SocialMediaGenerator() {
                                 boxShadow: dark ? "0 4px 20px rgba(0,0,0,0.2)" : "0 2px 10px rgba(0,0,0,0.02)"
                             }}>
                                 <Typography variant="caption" sx={{
-                                    color: "text.secondary",
+                                    color: dark ? "rgba(255,255,255,0.45)" : "#374151",
                                     fontWeight: 800,
                                     mb: 2,
                                     display: "block",
@@ -1169,7 +1276,7 @@ function SocialMediaGenerator() {
                                         { label: "Available Now", count: numAvailable, setter: setNumAvailable, color: "#22c55e", icon: <AutoAwesomeIcon sx={{ fontSize: 20 }} /> },
                                         { label: "Coming Soon", count: numSoon, setter: setNumSoon, color: "#ec4899", icon: <CalendarTodayIcon sx={{ fontSize: 20 }} /> },
                                         { label: "Narrative Beats", count: numOthers, setter: setNumOthers, color: "#f59e0b", icon: <ChatIcon sx={{ fontSize: 20 }} /> },
-                                        { label: "Cinematic Videos", count: numVideos, setter: setNumVideos, color: "#8b5cf6", icon: <PlayCircleOutlineIcon sx={{ fontSize: 20 }} />, isVideo: true },
+                                        { label: "Videos", count: numVideos, setter: setNumVideos, color: "#8b5cf6", icon: <PlayCircleOutlineIcon sx={{ fontSize: 20 }} />, isVideo: true },
                                     ].map((type) => (
                                         <Grid item xs={type.isVideo ? 12 : 6} key={type.label}>
                                             <Box sx={{
@@ -1293,8 +1400,8 @@ function SocialMediaGenerator() {
                                         boxShadow: "0 6px 24px rgba(99,102,241,0.5)",
                                     },
                                     "&:disabled": {
-                                        background: dark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)",
-                                        color: "text.disabled",
+                                        background: dark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.10)",
+                                        color: dark ? "rgba(255,255,255,0.3)" : "#374151",
                                         boxShadow: "none",
                                     },
                                 }}
@@ -1360,11 +1467,18 @@ function SocialMediaGenerator() {
                             "& .MuiOutlinedInput-root": {
                                 borderRadius: "12px",
                                 background: dark ? "rgba(255,255,255,0.03)" : "#fff",
-                            }
+                            },
+                            "& input::placeholder": {
+                                color: dark ? "rgba(255,255,255,0.35)" : "#374151",
+                                opacity: 1,
+                            },
+                            "& input": {
+                                color: dark ? "#e2e8f0" : "#111827",
+                            },
                         }}
                         InputProps={{
                             startAdornment: (
-                                <HistoryIcon sx={{ mr: 1, color: "text.disabled", fontSize: 20 }} />
+                                <HistoryIcon sx={{ mr: 1, color: dark ? "rgba(255,255,255,0.35)" : "#374151", fontSize: 20 }} />
                             ),
                             endAdornment: searchQuery && (
                                 <IconButton size="small" onClick={() => setSearchQuery("")}>
@@ -1380,11 +1494,14 @@ function SocialMediaGenerator() {
                 RESULTS SECTION — shown for each batch
             ══════════════════════════════════════════════════ */}
             {batches
-                .filter(b => b.book_title.toLowerCase().includes(searchQuery.toLowerCase()))
+                .filter(b => (b.book_title || "").toLowerCase().includes((searchQuery || "").toLowerCase()))
                 .map((batch) => {
-                    const isExpanded = expandedBatches[batch.id] !== false;
+                    const bid = batch.id || batch.job_id;
+                    const isExpanded = expandedBatches[bid] !== false;
+                    const batchImages = Array.isArray(batch.images) ? batch.images : [];
+                    const batchVideos = Array.isArray(batch.videos) ? batch.videos : [];
                     return (
-                        <Box key={batch.id} sx={{ mb: 4, position: "relative" }}>
+                        <Box key={bid} sx={{ mb: 4, position: "relative" }}>
                             {/* ── High-Status Session Header ── */}
                             <Paper
                                 elevation={0}
@@ -1414,11 +1531,11 @@ function SocialMediaGenerator() {
                                         <HistoryIcon sx={{ color: "#fff", fontSize: 20 }} />
                                     </Box>
                                     <Box>
-                                        <Typography variant="subtitle1" sx={{ fontWeight: 800, color: "text.primary" }}>
-                                            {batch.book_title} <Divider sx={{ display: "inline-block", mx: 1, height: 16, verticalAlign: "middle" }} orientation="vertical" /> <Typography component="span" variant="subtitle2" sx={{ fontWeight: 500, color: "text.secondary" }}>{batch.author_name}</Typography>
+                                        <Typography variant="subtitle1" sx={{ fontWeight: 800, color: dark ? "#e2e8f0" : "#111827" }}>
+                                            {batch.book_title || "Untitled Session"} <Divider sx={{ display: "inline-block", mx: 1, height: 16, verticalAlign: "middle", borderColor: dark ? "rgba(255,255,255,0.15)" : "rgba(0,0,0,0.15)" }} orientation="vertical" /> <Typography component="span" variant="subtitle2" sx={{ fontWeight: 500, color: dark ? "#94a3b8" : "#374151" }}>{batch.author_name || "Unknown Author"}</Typography>
                                         </Typography>
-                                        <Typography variant="caption" sx={{ color: "text.disabled", display: "block", mt: -0.5 }}>
-                                            {new Date(batch.timestamp).toLocaleString()} · {batch.images?.length || 0} images · {batch.videos?.length || 0} videos
+                                        <Typography variant="caption" sx={{ color: dark ? "#64748b" : "#6b7280", display: "block", mt: -0.5 }}>
+                                            {new Date(batch.timestamp).toLocaleString()} · {batchImages.length} images · {batchVideos.length} videos
                                         </Typography>
                                     </Box>
                                 </Box>
@@ -1506,7 +1623,7 @@ function SocialMediaGenerator() {
                                     {/* ── Generated Images ── */}
                                     <Box sx={{ mb: 3 }}>
                                         <Grid container spacing={2}>
-                                            {batch.images
+                                            {batchImages
                                                 .filter(img => {
                                                     const currentFilter = batchFilters[batch.id] || "all";
                                                     if (currentFilter === "all") return true;
@@ -1517,7 +1634,7 @@ function SocialMediaGenerator() {
                                                         <ImageCard
                                                             img={img}
                                                             idx={idx}
-                                                            globalIdx={batch.images.indexOf(img)}
+                                                            globalIdx={batchImages.indexOf(img)}
                                                             captions={batch.captions}
                                                             bookTitle={batch.book_title}
                                                             dark={dark}
@@ -1533,7 +1650,7 @@ function SocialMediaGenerator() {
                                                 ))}
                                         </Grid>
                                         {/* Empty State for Filter */}
-                                        {batch.images.filter(img => {
+                                        {batchImages.filter(img => {
                                             const currentFilter = batchFilters[batch.id] || "all";
                                             if (currentFilter === "all") return true;
                                             return img.category === currentFilter;
@@ -1547,13 +1664,13 @@ function SocialMediaGenerator() {
                                     </Box>
 
                                     {/* ── Generated Videos ── */}
-                                    {batch.videos && batch.videos.length > 0 && (
+                                    {batchVideos.length > 0 && (
                                         <Box sx={{ mb: 3 }}>
                                             <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 1.5, display: "flex", alignItems: "center", gap: 1 }}>
                                                 🎬 Videos
                                             </Typography>
                                             <Grid container spacing={2}>
-                                                {batch.videos.map((vid, idx) => (
+                                                {batchVideos.map((vid, idx) => (
                                                     <Grid item xs={12} sm={6} md={3} key={idx}>
                                                         <VideoCard
                                                             vid={vid}
