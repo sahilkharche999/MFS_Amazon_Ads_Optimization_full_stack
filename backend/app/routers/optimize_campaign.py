@@ -204,7 +204,7 @@ def optimize_campaign(campaign_id: str, request: Request, start_date: str = None
             """
             cursor.execute(query, (campaign_id, start_date, end_date))
         else:
-            logger.info("Executing default 14-day aggregation query")
+            logger.info("Executing default 30-day aggregation query")
             query = """
                 SELECT
                     target_id,
@@ -217,7 +217,7 @@ def optimize_campaign(campaign_id: str, request: Request, start_date: str = None
                     SUM(purchases_7d) AS purchases
             FROM sp_targeting_reports
             WHERE campaign_id = %s
-              AND report_date >= CURDATE() - INTERVAL 14 DAY
+              AND report_date >= CURDATE() - INTERVAL 30 DAY
             GROUP BY target_id, targeting
             """
             cursor.execute(query, (campaign_id,))

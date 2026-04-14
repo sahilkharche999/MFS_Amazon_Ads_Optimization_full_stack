@@ -37,7 +37,13 @@ def get_campaign_dashboard(campaign_id: str, start_date: str, end_date: str, req
 
         cursor.execute("""
             SELECT name, targetingType
-            FROM campaigns
+            FROM (
+                SELECT campaignId, name, targetingType FROM campaigns
+                UNION
+                SELECT campaignId, campaignName as name, 'UNKNOWN' as targetingType 
+                FROM campaign_performance_daily
+                GROUP BY campaignId, campaignName
+            ) combined
             WHERE campaignId = %s
         """, (campaign_id,))
         

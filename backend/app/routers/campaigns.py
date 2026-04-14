@@ -67,7 +67,28 @@ def get_campaigns(request: Request):
                 ELSE 'UNKNOWN'
             END AS type
 
-        FROM campaigns c
+        FROM (
+            -- Priority 1: Use the master campaigns table for full metadata
+            SELECT 
+                campaignId, name, state, startDate, endDate, budget, budgetType, targetingType
+            FROM campaigns
+            
+            UNION
+            
+            -- Priority 2: Fallback to performance table for newly fetched campaigns not yet in master
+            SELECT 
+                p.campaignId, 
+                p.campaignName as name, 
+                p.campaignStatus as state, 
+                MIN(p.date) as startDate, 
+                NULL as endDate, 
+                MAX(p.campaignBudgetAmount) as budget, 
+                p.campaignBudgetType as budgetType, 
+                'UNKNOWN' as targetingType
+            FROM campaign_performance_daily p
+            WHERE p.campaignId NOT IN (SELECT campaignId FROM campaigns)
+            GROUP BY p.campaignId, p.campaignName, p.campaignStatus, p.campaignBudgetType
+        ) c
 
         ORDER BY c.startDate DESC
         """
