@@ -482,30 +482,18 @@ async def generate_caption(platform: str, post_concept: str, book_title: str, au
         genre=metadata.get("primary_genre", "General")
     )
 
-    client = get_openrouter_client()
-
-    # logger.info(f"Generating {platform} caption for: {post_concept[:50]}...")
-    
-    loop = asyncio.get_event_loop()
-    def _run():
-        return client.chat.completions.create(
-            model="openai/gpt-4o-mini",
-            temperature=0.7,
-            messages=[
-                {"role": "system", "content": GUARDRAILS_SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
-        )
-
-    response = await loop.run_in_executor(None, _run)
-    caption = response.choices[0].message.content.strip()
-    return caption
+    return await call_llm(
+        system_prompt=GUARDRAILS_SYSTEM_PROMPT,
+        user_content=user_prompt,
+        model="openai/gpt-4o-mini", # Explicitly use the high-speed/reliability model for captions
+        temperature=0.7
+    )
 
 
 # ────────────────────────────────────────────────────────────
 # Post Ideas Generation via OpenRouter
 # ────────────────────────────────────────────────────────────
-def generate_post_ideas(
+async def generate_post_ideas(
     metadata: dict, count: int = 30
 ) -> list[str]:
     """
@@ -526,21 +514,14 @@ def generate_post_ideas(
         book_data=book_data_summary,
     )
 
-    client = get_openrouter_client()
-
     logger.info(f"Generating {count} post ideas from manuscript...")
 
-    response = client.chat.completions.create(
+    raw = await call_llm(
+        system_prompt=GUARDRAILS_SYSTEM_PROMPT,
+        user_content=user_prompt,
         model="deepseek/deepseek-chat",
-        temperature=0.8,
-        max_tokens=1200,
-        messages=[
-            {"role": "system", "content": GUARDRAILS_SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ],
+        temperature=0.8
     )
-
-    raw = response.choices[0].message.content.strip()
 
     # Try to parse as JSON array
     try:
@@ -577,26 +558,13 @@ async def detect_genre_async(manuscript_text: str) -> str:
     """
     from app.social_media.prompts import GENRE_DETECTION_PROMPT
     
-    client = get_openrouter_client()
-    logger.info("Detecting book genre from manuscript...")
-
-    user_prompt = GENRE_DETECTION_PROMPT.format(
-        manuscript_text=manuscript_text[:6_000]
+    raw = await call_llm(
+        system_prompt=GENRE_DETECTION_PROMPT.format(manuscript_text=manuscript_text[:6_000]),
+        user_content="What is the genre of this book?",
+        model="deepseek/deepseek-chat",
+        temperature=0.1
     )
-
-    loop = asyncio.get_event_loop()
-    def _call():
-        return client.chat.completions.create(
-            model="deepseek/deepseek-chat",
-            temperature=0.1, # Extremely low for classification
-            max_tokens=100,
-            messages=[
-                {"role": "user", "content": user_prompt},
-            ],
-        )
-
-    response = await loop.run_in_executor(None, _call)
-    raw = response.choices[0].message.content.strip().upper()
+    raw = raw.upper()
     
     # Filter out common prefixes like "1. " or "GENRE: " if GPT misbehaves
     import re
@@ -674,23 +642,48 @@ async def extract_book_metadata_async(manuscript_text: str) -> dict:
 async def call_llm(system_prompt: str, user_content: str, model: str = "deepseek/deepseek-chat", temperature: float = 0.7) -> str:
     """
     Helper to call OpenRouter LLM with provided prompts.
+    Hardened for production with retries and fallback models.
     """
     client = get_openrouter_client()
     loop = asyncio.get_event_loop()
     
-    def _call():
-        return client.chat.completions.create(
-            model=model,
-            temperature=temperature,
-            max_tokens=2000,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content},
-            ],
-        )
+    # Cascade of models for maximum reliability
+    models_to_try = [model, "openai/gpt-4o-mini"]
+    max_retries_per_model = 2
     
-    response = await loop.run_in_executor(None, _call)
-    return response.choices[0].message.content.strip()
+    for current_model in models_to_try:
+        for attempt in range(max_retries_per_model + 1):
+            try:
+                logger.info(f"[LLM] Calling {current_model} (Attempt {attempt+1})")
+                
+                def _call():
+                    return client.chat.completions.create(
+                        model=current_model,
+                        temperature=temperature,
+                        max_tokens=2000,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_content},
+                        ],
+                    )
+                
+                response = await loop.run_in_executor(None, _call)
+                content = response.choices[0].message.content.strip()
+                
+                if content:
+                    logger.info(f"[LLM] Success with {current_model}")
+                    return content
+                    
+            except Exception as e:
+                logger.warning(f"[LLM] Attempt {attempt+1} failed for {current_model}: {e}")
+                if attempt < max_retries_per_model:
+                    # Brief exponential backoff
+                    wait_time = (attempt + 1) * 2
+                    await asyncio.sleep(wait_time)
+                continue
+                
+    logger.error("[LLM] All models and retries failed.")
+    return ""
 
 # ============================================================
 # IMAGE PIPELINE (Stage 1 + 2 + 3)
@@ -834,7 +827,7 @@ def parse_llm_json(content: str) -> dict:
     """
     import re
     if not content:
-        return {}
+        raise ValueError("Empty content from LLM")
         
     cleaned = content.strip()
     
@@ -912,8 +905,6 @@ def parse_llm_json(content: str) -> dict:
     except Exception:
         pass
         
-    return {}
-
     logger.error(f"Failed to parse LLM JSON. Raw content: {content[:500]}...")
     raise ValueError(f"Invalid JSON format from LLM: {content[:100]}...")
 
@@ -1141,9 +1132,18 @@ async def generate_video_prompt_pipeline(manuscript_text: str, metadata: dict, r
     all_results = []
     
     async def _process_single_video(idx):
-        # Cycle through scenarios if we need more videos than we have top ones
-        scenario_idx = idx % len(top_scenarios)
-        selected_scenario = top_scenarios[scenario_idx]
+        # Cycle through scenarios if we need more videos than we have top ones (Harden against empty results)
+        if not top_scenarios:
+            logger.warning("[VIDEO PIPELINE] No top scenarios found! Using emergency fallback.")
+            selected_scenario = {
+                "visual_script": "A cinematic wide shot of a traveler in focus, simple background, looking toward the horizon.",
+                "action": "A cinematic wide shot",
+                "object": "horizon",
+                "consequence": "a moment of stillness"
+            }
+        else:
+            scenario_idx = idx % len(top_scenarios)
+            selected_scenario = top_scenarios[scenario_idx]
         
         if not isinstance(selected_scenario, dict):
             if isinstance(selected_scenario, str):

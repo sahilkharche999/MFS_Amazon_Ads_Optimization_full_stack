@@ -69,7 +69,7 @@ HEADERS = get_headers()
 
 # ================= DATE RANGE =================
 end_date = datetime.utcnow().date() - timedelta(days=1)
-start_date = end_date - timedelta(days=14)
+start_date = end_date - timedelta(days=30)
 
 logger.info(f"Report Date Range: {start_date} → {end_date}")
 

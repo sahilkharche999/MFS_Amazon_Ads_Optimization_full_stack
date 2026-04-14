@@ -262,9 +262,10 @@ async def generate_all_assets(
     logger.info(f"Allocation: {num_cover} Cover, {num_available} Avail, {num_soon} Soon, {num_others} Others")
 
     # Pass the entire metadata (The Brain) to downstream generators
-    post_ideas     = generate_post_ideas(metadata, count=total_posts)
-    # Pass the entire metadata (The Brain) to downstream generators
-    post_ideas     = generate_post_ideas(metadata, count=total_posts)
+    if total_posts > 50:
+        post_ideas     = await generate_post_ideas(metadata, count=total_posts)
+    else:
+        post_ideas     = await generate_post_ideas(metadata, count=total_posts)
     logger.info(f"Got {len(post_ideas)} post ideas")
 
     # Pad to required lengths
@@ -301,8 +302,17 @@ async def generate_all_assets(
     image_tasks = []
 
     for idx, category in enumerate(categories):
-        # Cycle through concepts if more images than concepts
-        concept = image_concepts[idx % len(image_concepts)]
+        # Cycle through concepts if more images than concepts (Harden against empty lists)
+        if not image_concepts:
+            logger.warning("[SERVICE] No image concepts found! Using emergency fallback.")
+            concept = {
+                "subject": "A minimalistic architectural space",
+                "emotion": "contemplative",
+                "placement": "soft lighting",
+                "visual_vibe": "premium cinematic"
+            }
+        else:
+            concept = image_concepts[idx % len(image_concepts)]
         
         # Build the exact payload that will be sent to FAL
         payload = build_flux_image_prompt(

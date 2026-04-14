@@ -49,7 +49,7 @@ def get_dashboard_summary(request: Request, start_date: str = None, end_date: st
             """
             cursor.execute(query, (start_date, end_date))
         else:
-            logger.info("Executing default 14-day summary KPI query")
+            logger.info("Executing default 30-day summary KPI query")
             query = """
             SELECT 
                 COALESCE(SUM(impressions),0) as impressions,
@@ -58,7 +58,7 @@ def get_dashboard_summary(request: Request, start_date: str = None, end_date: st
                 COALESCE(SUM(purchases14d),0) as orders,
                 COALESCE(SUM(sales14d),0) as sales
             FROM campaign_performance_daily
-            WHERE date >= CURDATE() - INTERVAL 14 DAY
+            WHERE date >= CURDATE() - INTERVAL 30 DAY
             """
             cursor.execute(query)
 
@@ -85,7 +85,7 @@ def get_dashboard_summary(request: Request, start_date: str = None, end_date: st
 
 
 # ======================
-# 14 DAY TREND
+# 30 DAY TREND
 # ======================
 @router.get("/dashboard/trend")
 def get_dashboard_trend(request: Request, start_date: str = None, end_date: str = None):
@@ -117,7 +117,7 @@ def get_dashboard_trend(request: Request, start_date: str = None, end_date: str 
             """
             cursor.execute(query, (start_date, end_date))
         else:
-            logger.info("Executing default 14-day trend query")
+            logger.info("Executing default 30-day trend query")
             query = """
             SELECT
                 date,
@@ -126,7 +126,7 @@ def get_dashboard_trend(request: Request, start_date: str = None, end_date: str 
                 COALESCE(SUM(spend),0) as spend,
                 COALESCE(SUM(purchases14d),0) as orders
             FROM campaign_performance_daily
-            WHERE date >= CURDATE() - INTERVAL 14 DAY
+            WHERE date >= CURDATE() - INTERVAL 30 DAY
             GROUP BY date
             ORDER BY date
             """
