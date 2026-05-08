@@ -17,10 +17,18 @@ from typing import Optional
 from openai import OpenAI
 from dotenv import load_dotenv
 
-# Ensure environment is loaded in this module
-load_dotenv()
-if not os.getenv("FAL_KEY") and os.path.exists("../.env"):
-    load_dotenv("../.env")
+# ── Robust .env Loading ──
+# Search in current, parent, and grandparent directories
+for p in [".env", "../.env", "../../.env"]:
+    if os.path.exists(p):
+        load_dotenv(p)
+
+if not os.getenv("FAL_KEY"):
+    # We log a warning instead of a raise here to allow the app to start, 
+    # but the image functions will raise their own errors if called without a key.
+    logging.getLogger(__name__).warning("FAL_KEY not found in any .env file location searched.")
+
+logger = logging.getLogger("social_media.generators")
 
 from app.social_media.prompts import (
     GUARDRAILS_SYSTEM_PROMPT,
@@ -802,23 +810,55 @@ async def generate_single_image(
     payload: dict
 ) -> str:
     """
-    Generate a single image using fal-ai/flux-2-pro/edit using a pre-built payload
-    Returns image URL
+    Generate a single image using fal-ai/flux-2-pro/edit using a pre-built payload.
+    Uses fal_client.run() which handles the FAL queue + polling pattern correctly.
+    Returns the CDN URL of the generated image.
     """
-    
-    # Call FAL API
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            "https://fal.run/fal-ai/flux-2-pro/edit",
-            json=payload,
-            headers={"Authorization": f"Key {os.environ.get('FAL_KEY')}"}
-        ) as response:
-            if response.status != 200:
-                err_text = await response.text()
-                logger.error(f"FAL API Error ({response.status}): {err_text}")
-                return ""
-            result = await response.json()
-            return result.get("images", [{}])[0].get("url", "")
+    if not fal_client:
+        raise RuntimeError("fal-client is not installed. Please run 'pip install fal-client'.")
+
+    fal_key = os.getenv("FAL_KEY")
+    if not fal_key:
+        raise RuntimeError("FAL_KEY environment variable is not set.")
+    os.environ["FAL_KEY"] = fal_key
+
+    loop = asyncio.get_event_loop()
+
+    def _run_fal():
+        return fal_client.run(
+            "fal-ai/flux-2-pro/edit",
+            arguments=payload,
+        )
+
+    logger.info(f"[generate_single_image] Submitting to FAL queue: {payload.get('prompt', '')[:80]}...")
+
+    # Retry once — FAL can return empty on transient queue/timeout issues.
+    # A single retry with back-off recovers most transient failures without burning extra credits.
+    MAX_ATTEMPTS = 2
+    last_result = None
+
+    for attempt in range(MAX_ATTEMPTS):
+        if attempt > 0:
+            logger.warning(f"[generate_single_image] Attempt {attempt + 1}/{MAX_ATTEMPTS} — retrying after 3s back-off...")
+            await asyncio.sleep(3)
+
+        last_result = await loop.run_in_executor(None, _run_fal)
+
+        # Defensive parsing: `or []` handles both missing key AND explicit None
+        images = last_result.get("images") or []
+
+        # Safe index access: avoid IndexError if list is empty
+        url = images[0].get("url") if images else None
+
+        if url:
+            logger.info(f"[generate_single_image] Image generated (attempt {attempt + 1}): {url[:80]}...")
+            return url
+
+        logger.warning(f"[generate_single_image] Attempt {attempt + 1} returned no URL. Response: {last_result}")
+
+    # All attempts exhausted — log full response and raise so _gen_safe marks this as "failed"
+    logger.error(f"[generate_single_image] FAL failed after {MAX_ATTEMPTS} attempts. Last response: {last_result}")
+    raise ValueError("FAL returned no image URL after retry")
 
 def parse_llm_json(content: str) -> dict:
     """

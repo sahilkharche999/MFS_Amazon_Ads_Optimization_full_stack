@@ -374,7 +374,6 @@ async def generate_all_assets(
                     global_image_idx = batch_start + b_idx
                     local_img_path = temp_dir / f"image_{global_image_idx}.png"
                     fal_url = res["url"]
-                    
                     # Retry download up to 3 times before giving up
                     downloaded = False
                     for attempt in range(3):
@@ -383,16 +382,16 @@ async def generate_all_assets(
                             break
                         logger.warning(f"Download attempt {attempt+1}/3 failed for image {global_image_idx}")
                         await asyncio.sleep(2)
-                    
+
                     if downloaded:
                         s3_url = upload_image(local_img_path, job_id, res["category"], global_image_idx)
                         if s3_url:
                             res["url"] = s3_url
                             logger.info(f"Image {global_image_idx} uploaded to S3: {s3_url}")
                         else:
-                            logger.warning(f"S3 upload failed for image {global_image_idx}, keeping temporary FAL URL")
+                            logger.warning(f"S3 upload failed for image {global_image_idx}, keeping FAL URL")
                     else:
-                        logger.error(f"All download attempts failed for image {global_image_idx}. FAL URL may expire.")
+                        logger.error(f"All download attempts failed for image {global_image_idx}.")
             
             images.extend(batch_results)
             
@@ -478,9 +477,9 @@ async def generate_all_assets(
     logger.info(f"Video generation summary. OK: {ok_videos}/{len(videos)}")
 
     # ── Step 7: Generate Social Media Captions ───────────────
-    # Uses the first post idea as the anchor for the generic platform captions
-    _update_job("running", "Generating social media captions")
-    logger.info("Step 7: Generating platform captions")
+    # Generates unique captions for EVERY image per platform using the image's tagline
+    _update_job("running", "Generating unique captions for each image")
+    logger.info(f"Step 7: Generating unique captions for {len(images)} images")
     
     captions = {"instagram": [], "facebook": [], "linkedin": [], "x": []}
     credits_exhausted = False
@@ -488,24 +487,36 @@ async def generate_all_assets(
         from app.social_media.generators import generate_caption
         platforms = ["instagram", "facebook", "linkedin", "x"]
         
-        # Use first post idea for the platform-wide captions
-        concept_for_captions = post_ideas[0] if post_ideas else book_title
-        
-        caption_tasks = [generate_caption(p, concept_for_captions, book_title, author_name, metadata=metadata) for p in platforms]
-        caption_results = await asyncio.gather(*caption_tasks, return_exceptions=True)
-        
-        for platform, result_item in zip(platforms, caption_results):
-            if isinstance(result_item, Exception):
-                err_str = str(result_item)
-                if "402" in err_str or "credits" in err_str.lower():
-                    credits_exhausted = True
-                    logger.warning(f"OpenRouter credit limit hit during {platform} caption generation.")
-                    captions[platform] = ["⚠️ Credits Low — Recharge OpenRouter to generate captions."]
+        # We generate captions platform by platform to avoid hitting global limits
+        for platform in platforms:
+            logger.info(f"[Captions] Starting batch for {platform}...")
+            plat_tasks = []
+            for idx, img in enumerate(images):
+                # Use the image's tagline/concept to make the caption unique to the image
+                task_concept = img.get("tagline") or (post_ideas[0] if post_ideas else book_title)
+                plat_tasks.append(generate_caption(platform, task_concept, book_title, author_name, metadata=metadata))
+            
+            # Use small batches or a slight delay if necessary. 
+            # For now, let's gather but catch errors per-item.
+            plat_results = await asyncio.gather(*plat_tasks, return_exceptions=True)
+            
+            final_plat_captions = []
+            for i, res_item in enumerate(plat_results):
+                if isinstance(res_item, Exception):
+                    err_hint = str(res_item)
+                    logger.error(f"[Captions] Failed for {platform} image {i}: {err_hint}")
+                    if "402" in err_hint or "credits" in err_hint.lower():
+                        credits_exhausted = True
+                        final_plat_captions.append("⚠️ Credits Low")
+                    else:
+                        final_plat_captions.append(f"Caption failed ({err_hint[:20]}...)")
                 else:
-                    logger.error(f"Caption generation failed for {platform}: {result_item}")
-                    captions[platform] = []
-            else:
-                captions[platform] = [result_item]
+                    final_plat_captions.append(res_item)
+            
+            captions[platform] = final_plat_captions
+            # Tiny pause between platforms to be safe
+            await asyncio.sleep(0.5)
+
     except Exception as e:
         err_str = str(e)
         if "402" in err_str or "credits" in err_str.lower():
@@ -550,7 +561,9 @@ async def generate_all_assets(
         "post_ideas": post_ideas,
         "stats": {
             "image_count": len(images),
-            "video_count": len(videos)
+            "video_count": len(videos),
+            "images_ok": sum(1 for i in images if i.get("status") == "ok"),
+            "videos_ok": sum(1 for v in videos if v.get("status") == "ok"),
         }
     }
     return result
