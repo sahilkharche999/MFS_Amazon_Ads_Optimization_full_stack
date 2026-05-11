@@ -488,34 +488,52 @@ async def generate_all_assets(
         platforms = ["instagram", "facebook", "linkedin", "x"]
         
         # We generate captions platform by platform to avoid hitting global limits
+        # We generate captions platform by platform, in micro-batches of 3
+        # to ensure the remote server doesn't time out or rate-limit us.
         for platform in platforms:
             logger.info(f"[Captions] Starting batch for {platform}...")
-            plat_tasks = []
-            for idx, img in enumerate(images):
-                # Use the image's tagline/concept to make the caption unique to the image
-                task_concept = img.get("tagline") or (post_ideas[0] if post_ideas else book_title)
-                plat_tasks.append(generate_caption(platform, task_concept, book_title, author_name, metadata=metadata))
-            
-            # Use small batches or a slight delay if necessary. 
-            # For now, let's gather but catch errors per-item.
-            plat_results = await asyncio.gather(*plat_tasks, return_exceptions=True)
             
             final_plat_captions = []
-            for i, res_item in enumerate(plat_results):
-                if isinstance(res_item, Exception):
-                    err_hint = str(res_item)
-                    logger.error(f"[Captions] Failed for {platform} image {i}: {err_hint}")
-                    if "402" in err_hint or "credits" in err_hint.lower():
-                        credits_exhausted = True
-                        final_plat_captions.append("⚠️ Credits Low")
+            for i in range(0, len(images), 3):
+                batch_subset = images[i : i + 3]
+                micro_tasks = []
+                for img in batch_subset:
+                    task_concept = img.get("tagline") or (post_ideas[0] if post_ideas else book_title)
+                    # ── CRITICAL: 90s timeout per request ──
+                    # Increased to 90s to handle heavy AI load.
+                    # This prevents one slow response from hanging your whole production run.
+                    micro_tasks.append(
+                        asyncio.wait_for(
+                            generate_caption(
+                                platform,
+                                task_concept,
+                                book_title,
+                                author_name,
+                                metadata=metadata
+                            ),
+                            timeout=90
+                        )
+                    )
+                
+                micro_results = await asyncio.gather(*micro_tasks, return_exceptions=True)
+                
+                for res_item in micro_results:
+                    if isinstance(res_item, asyncio.TimeoutError):
+                        logger.warning(f"[Captions] Timed out for {platform} — skipping this image caption.")
+                        final_plat_captions.append("Caption timed out")
+                    elif isinstance(res_item, Exception):
+                        err_hint = str(res_item)
+                        logger.error(f"[Captions] Failed for {platform}: {err_hint}")
+                        if "402" in err_hint or "credits" in err_hint.lower():
+                            credits_exhausted = True
+                            final_plat_captions.append("⚠️ Credits Low")
+                        else:
+                            final_plat_captions.append("Caption unavailable")
                     else:
-                        final_plat_captions.append(f"Caption failed ({err_hint[:20]}...)")
-                else:
-                    final_plat_captions.append(res_item)
+                        final_plat_captions.append(res_item)
             
             captions[platform] = final_plat_captions
-            # Tiny pause between platforms to be safe
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.2)  # Tiny breath between platforms
 
     except Exception as e:
         err_str = str(e)
