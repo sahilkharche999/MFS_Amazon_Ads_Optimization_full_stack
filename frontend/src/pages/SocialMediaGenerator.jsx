@@ -440,6 +440,8 @@ const ImageCard = memo(({ img, idx, globalIdx, captions, bookTitle, dark, onPrev
                             }}
                         >
                             {(() => {
+                                // The backend now generates unique captions for every image in the batch.
+                                // We use globalIdx to link each image to its matching caption.
                                 const captionText = (captions[selectedPlat] || [])[globalIdx];
                                 const isCreditsError = captionText && (captionText.includes("Credits Low") || captionText.includes("402") || captionText.includes("Recharge"));
                                 if (isCreditsError) {
@@ -463,7 +465,7 @@ const ImageCard = memo(({ img, idx, globalIdx, captions, bookTitle, dark, onPrev
                                             color: dark ? "rgba(255,255,255,0.65)" : "#374151",
                                         }}
                                     >
-                                        {captionText || "Generating caption…"}
+                                        {captionText || "No caption available"}
                                     </Typography>
                                 );
                             })()}
