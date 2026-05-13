@@ -900,52 +900,33 @@ def parse_llm_json(content: str) -> dict:
         except:
             pass
 
-    # 2. Regex fallback (detect common JSON structures)
-    match_arr = re.search(r"(\[.*\])", cleaned, re.DOTALL)
-    if not match_arr:
-        # Try to find a partial/truncated array (starts with [ and maybe has some {} inside)
-        match_arr_partial = re.search(r"(\[.*)", cleaned, re.DOTALL)
-        if match_arr_partial:
-            candidate = match_arr_partial.group(1).strip()
-            # If it's a list that doesn't end with ], try to close it
-            if not candidate.endswith("]"):
-                last_obj = candidate.rfind("}")
-                if last_obj != -1:
-                    candidate = candidate[:last_obj+1] + "]"
+    # 2. Seek and Verify Strategy (seek first valid JSON structure)
+    # We look for [ or { and try parsing from that index onwards
+    for i in range(len(cleaned)):
+        if cleaned[i] in ['[', '{']:
+            # Search from the end for the corresponding closer
+            closer = ']' if cleaned[i] == '[' else '}'
+            for j in range(len(cleaned) - 1, i, -1):
+                if cleaned[j] == closer:
+                    candidate = cleaned[i:j+1]
                     try:
                         return json.loads(candidate)
-                    except: pass
-    else:
+                    except json.JSONDecodeError:
+                        # Try simple cleanup for common LLM issues (trailing commas)
+                        try:
+                            fixed = re.sub(r",\s*([\]}])", r"\1", candidate)
+                            return json.loads(fixed)
+                        except:
+                            continue # Try next closer or next starter
+    
+    # 3. Fallback: Generic regex if seek-and-verify missed something
+    match = re.search(r"(\[.*\]|\{.*\})", cleaned, re.DOTALL)
+    if match:
         try:
-            return json.loads(match_arr.group(1))
-        except:
-            # Try to fix truncated JSON if it's an array
-            try:
-                candidate = match_arr.group(1).strip()
-                if not candidate.endswith("]"):
-                    # Attempt to find last valid object and close it
-                    last_obj = candidate.rfind("}")
-                    if last_obj != -1:
-                        candidate = candidate[:last_obj+1] + "]"
-                        return json.loads(candidate)
-            except: pass
+            return json.loads(match.group(1))
+        except: pass
 
-    match_obj = re.search(r"(\{.*\})", cleaned, re.DOTALL)
-    if match_obj:
-        try:
-            return json.loads(match_obj.group(1))
-        except Exception as e:
-            logger.debug(f"Regex object match failed to parse: {e}")
-            
-    # Final attempt: manual cleanup of common LLM artifacts
-    try:
-        # Extreme cleanup: replace any \n followed by " with "
-        fixed = re.sub(r'\n\s*"', '"', cleaned)
-        return json.loads(fixed)
-    except Exception:
-        pass
-        
-    logger.error(f"Failed to parse LLM JSON. Raw content: {content[:500]}...")
+    logger.error(f"Failed to parse LLM JSON. Raw content: {content[:1000]}...")
     raise ValueError(f"Invalid JSON format from LLM: {content[:100]}...")
 
 # ────────────────────────────────────────────────────────────

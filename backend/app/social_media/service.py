@@ -374,6 +374,7 @@ async def generate_all_assets(
                     global_image_idx = batch_start + b_idx
                     local_img_path = temp_dir / f"image_{global_image_idx}.png"
                     fal_url = res["url"]
+                
                     # Retry download up to 3 times before giving up
                     downloaded = False
                     for attempt in range(3):
@@ -498,42 +499,40 @@ async def generate_all_assets(
                 batch_subset = images[i : i + 3]
                 micro_tasks = []
                 for img in batch_subset:
+                    # Use unique tagline if available, else fallback to book title
                     task_concept = img.get("tagline") or (post_ideas[0] if post_ideas else book_title)
-                    # ── CRITICAL: 90s timeout per request ──
-                    # Increased to 90s to handle heavy AI load.
-                    # This prevents one slow response from hanging your whole production run.
                     micro_tasks.append(
                         asyncio.wait_for(
-                            generate_caption(
-                                platform,
-                                task_concept,
-                                book_title,
-                                author_name,
-                                metadata=metadata
-                            ),
+                            generate_caption(platform, task_concept, book_title, author_name, metadata=metadata),
                             timeout=90
                         )
                     )
                 
+                # Gather the micro-batch
                 micro_results = await asyncio.gather(*micro_tasks, return_exceptions=True)
                 
-                for res_item in micro_results:
+                for idx, res_item in enumerate(micro_results):
                     if isinstance(res_item, asyncio.TimeoutError):
-                        logger.warning(f"[Captions] Timed out for {platform} — skipping this image caption.")
-                        final_plat_captions.append("Caption timed out")
+                        logger.warning(f"[Captions] Timed out for {platform} item {i+idx}")
+                        final_plat_captions.append("Caption timed out (AI occupied)")
                     elif isinstance(res_item, Exception):
                         err_hint = str(res_item)
-                        logger.error(f"[Captions] Failed for {platform}: {err_hint}")
+                        logger.error(f"[Captions] Error for {platform} item {i+idx}: {err_hint}")
                         if "402" in err_hint or "credits" in err_hint.lower():
                             credits_exhausted = True
                             final_plat_captions.append("⚠️ Credits Low")
                         else:
-                            final_plat_captions.append("Caption unavailable")
+                            final_plat_captions.append("No caption available (AI error)")
                     else:
-                        final_plat_captions.append(res_item)
+                        # Success case - ensures we have a string
+                        final_plat_captions.append(str(res_item) if res_item else "No caption generated")
             
+            # Final alignment check
+            while len(final_plat_captions) < len(images):
+                final_plat_captions.append("Caption missing (Processing error)")
+                
             captions[platform] = final_plat_captions
-            await asyncio.sleep(0.2)  # Tiny breath between platforms
+            await asyncio.sleep(0.1) # Rapid but safe delay between platforms
 
     except Exception as e:
         err_str = str(e)
@@ -548,15 +547,21 @@ async def generate_all_assets(
     # ── Step 8: Return assembled assets & Final Manifest ──
     _update_job("running", "Finalizing assets")
     
-    # Upload manifest to S3
+    # Calculate final stats strictly
+    images_ok_count = sum(1 for i in images if i.get("status") == "ok")
+    videos_ok_count = sum(1 for v in videos if v.get("status") == "ok")
+    
+    logger.info(f"JOB COMPLETE Audit: {images_ok_count} images OK, {videos_ok_count} videos OK")
+
+    # Final Manifest Data for S3
     manifest_data = {
         "id": job_id,
         "job_id": job_id,
         "book_title": book_title,
         "author_name": author_name,
         "timestamp": datetime.now().isoformat(),
-        "images": [i for i in images if i["status"] == "ok" and i.get("url")],
-        "videos": [v for v in videos if v["status"] == "ok" and v.get("url")],
+        "images": [i for i in images if i["status"] == "ok"],
+        "videos": [v for v in videos if v["status"] == "ok"],
         "captions": captions,
         "credits_exhausted": credits_exhausted,
     }
@@ -576,16 +581,14 @@ async def generate_all_assets(
         "images": images,
         "videos": videos,
         "captions": captions,
-        "post_ideas": post_ideas,
+        "post_ideas": [p for p in post_ideas if p],
         "stats": {
             "image_count": len(images),
             "video_count": len(videos),
-            "images_ok": sum(1 for i in images if i.get("status") == "ok"),
-            "videos_ok": sum(1 for v in videos if v.get("status") == "ok"),
+            "images_ok": images_ok_count,
+            "videos_ok": videos_ok_count,
         }
     }
-    return result
-
     return result
 
 async def get_s3_history() -> list[dict]:
